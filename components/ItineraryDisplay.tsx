@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { StructuredItinerary } from '@/types/travel';
+import BookingLinksDisplay from './BookingLinksDisplay';
 
 interface ItineraryDisplayProps {
   itinerary: StructuredItinerary | string;
@@ -214,6 +215,7 @@ export default function ItineraryDisplay({
               { id: 'accommodation', label: 'Stay', icon: '🏨' },
               { id: 'itinerary', label: 'Daily Plan', icon: '📅' },
               { id: 'budget', label: 'Budget', icon: '💰' },
+              { id: 'booking', label: 'Book Now', icon: '🔗' },
               { id: 'tips', label: 'Tips', icon: '💡' }
             ].map(tab => (
               <button
@@ -325,6 +327,42 @@ export default function ItineraryDisplay({
                         </div>
                       ))}
                     </div>
+
+                    {data.bookingLinks?.activities && (
+                      <div className="mt-6 bg-orange-50 border border-orange-200 rounded-xl p-6">
+                        <h4 className="text-lg font-bold text-orange-900 mb-4">🎯 Book Activities in {dest.name}</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {data.bookingLinks.activities.slice(0, 6).map((link, index) => (
+                            <div key={index} className="bg-white border border-orange-100 rounded-lg p-4">
+                              <h5 className="font-semibold text-gray-900 text-sm mb-2">{link.platform}</h5>
+                              <p className="text-xs text-gray-600 mb-3 line-clamp-2">{link.description}</p>
+                              <div className="mb-3">
+                                <div className="text-xs text-gray-600 mb-1">Key Features:</div>
+                                <ul className="text-xs text-gray-600 space-y-1">
+                                  {link.features.slice(0, 2).map((feature, featureIndex) => (
+                                    <li key={featureIndex} className="flex items-start">
+                                      <span className="text-orange-500 mr-1">•</span>
+                                      {feature}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                              <a
+                                href={link.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center justify-center w-full px-3 py-2 bg-orange-600 text-white text-xs font-medium rounded-md hover:bg-orange-700 transition-colors"
+                              >
+                                Book on {link.platform}
+                                <svg className="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+                                </svg>
+                              </a>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
             </div>
@@ -521,6 +559,78 @@ export default function ItineraryDisplay({
                   ))}
                 </div>
               </div>
+
+              {data.bookingLinks?.flights && (
+                <div className="bg-green-50 border border-green-200 rounded-xl p-6">
+                  <h3 className="text-lg font-bold text-green-900 mb-4">✈️ Book Your Flights</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {data.bookingLinks.flights.slice(0, 6).map((link, index) => (
+                      <div key={index} className="bg-white border border-green-100 rounded-lg p-4">
+                        <h5 className="font-semibold text-gray-900 text-sm mb-2">{link.platform}</h5>
+                        <p className="text-xs text-gray-600 mb-3 line-clamp-2">{link.description}</p>
+                        <div className="mb-3">
+                          <div className="text-xs text-gray-600 mb-1">Key Features:</div>
+                          <ul className="text-xs text-gray-600 space-y-1">
+                            {link.features.slice(0, 2).map((feature, featureIndex) => (
+                              <li key={featureIndex} className="flex items-start">
+                                <span className="text-green-500 mr-1">•</span>
+                                {feature}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                        <a
+                          href={link.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center justify-center w-full px-3 py-2 bg-green-600 text-white text-xs font-medium rounded-md hover:bg-green-700 transition-colors"
+                        >
+                          Book on {link.platform}
+                          <svg className="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+                          </svg>
+                        </a>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {data.bookingLinks?.cars && (
+                <div className="bg-purple-50 border border-purple-200 rounded-xl p-6">
+                  <h3 className="text-lg font-bold text-purple-900 mb-4">🚗 Rent a Car</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {data.bookingLinks.cars.slice(0, 6).map((link, index) => (
+                      <div key={index} className="bg-white border border-purple-100 rounded-lg p-4">
+                        <h5 className="font-semibold text-gray-900 text-sm mb-2">{link.platform}</h5>
+                        <p className="text-xs text-gray-600 mb-3 line-clamp-2">{link.description}</p>
+                        <div className="mb-3">
+                          <div className="text-xs text-gray-600 mb-1">Key Features:</div>
+                          <ul className="text-xs text-gray-600 space-y-1">
+                            {link.features.slice(0, 2).map((feature, featureIndex) => (
+                              <li key={featureIndex} className="flex items-start">
+                                <span className="text-purple-500 mr-1">•</span>
+                                {feature}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                        <a
+                          href={link.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center justify-center w-full px-3 py-2 bg-purple-600 text-white text-xs font-medium rounded-md hover:bg-purple-700 transition-colors"
+                        >
+                          Book on {link.platform}
+                          <svg className="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+                          </svg>
+                        </a>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -636,8 +746,64 @@ export default function ItineraryDisplay({
                       )}
                     </div>
                   )}
+
+                  {data.bookingLinks?.hotels && (
+                    <div className="mt-6 bg-blue-50 border border-blue-200 rounded-xl p-6">
+                      <h4 className="text-lg font-bold text-blue-900 mb-4">🔗 Book Hotels in {destination.destination}</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {data.bookingLinks.hotels.slice(0, 6).map((link, index) => (
+                          <div key={index} className="bg-white border border-blue-100 rounded-lg p-4">
+                            <h5 className="font-semibold text-gray-900 text-sm mb-2">{link.platform}</h5>
+                            <p className="text-xs text-gray-600 mb-3 line-clamp-2">{link.description}</p>
+                            <div className="mb-3">
+                              <div className="text-xs text-gray-600 mb-1">Key Features:</div>
+                              <ul className="text-xs text-gray-600 space-y-1">
+                                {link.features.slice(0, 2).map((feature, featureIndex) => (
+                                  <li key={featureIndex} className="flex items-start">
+                                    <span className="text-green-500 mr-1">•</span>
+                                    {feature}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                            <a
+                              href={link.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center justify-center w-full px-3 py-2 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-700 transition-colors"
+                            >
+                              Book on {link.platform}
+                              <svg className="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+                              </svg>
+                            </a>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
+            </div>
+          )}
+
+          {activeTab === 'booking' && (
+            <div className="space-y-6">
+              {data.bookingLinks ? (
+                <BookingLinksDisplay 
+                  bookingLinks={data.bookingLinks} 
+                  destination={destination}
+                />
+              ) : (
+                <div className="text-center py-12">
+                  <div className="text-6xl mb-4">🔗</div>
+                  <h3 className="text-xl font-semibold text-gray-900 mb-2">Booking Links Coming Soon</h3>
+                  <p className="text-gray-600 max-w-md mx-auto">
+                    We&apos;re generating personalized booking links for your trip. 
+                    This may take a moment to load.
+                  </p>
+                </div>
+              )}
             </div>
           )}
 

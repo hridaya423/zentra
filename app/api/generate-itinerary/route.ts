@@ -1,11 +1,370 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from 'next/server';
 import { Groq } from 'groq-sdk';
-import { Destination } from '@/types/travel';
+import { Destination, BookingLinks, StructuredItinerary, BookingLink } from '@/types/travel';
 
 
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
+
+const FIRECRAWL_API_URL = process.env.FIRECRAWL_API_URL ?? 'https://api.firecrawl.dev/v1';
+const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
+
+interface ScrapedAccommodationData {
+  name: string;
+  priceRange: string;
+  rating: number;
+  reviews: number;
+  amenities: string[];
+  location: string;
+  availability: boolean;
+}
+
+interface ScrapedRestaurantData {
+  name: string;
+  cuisine: string;
+  priceRange: string;
+  rating: number;
+  reviews: number;
+  specialties: string[];
+  reservationRequired: boolean;
+}
+
+interface ScrapedActivityData {
+  name: string;
+  type: string;
+  price: string;
+  duration: string;
+  rating: number;
+  reviews: number;
+  description: string;
+  bookingRequired: boolean;
+}
+
+interface ScrapedLocalData {
+  currentEvents: Array<{
+    name: string;
+    date: string;
+    description: string;
+    cost: string;
+  }>;
+  weatherTips: string;
+  localInsights: string[];
+  transportUpdates: string[];
+}
+
+async function fetchSearch(query: string, limit = 3): Promise<Array<{ title: string; url: string; description: string }>> {
+  try {
+    const res = await fetch(`${FIRECRAWL_API_URL}/search`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${FIRECRAWL_API_KEY}`
+      },
+      body: JSON.stringify({ query, limit })
+    });
+    const json = await res.json();
+    if (!json.success) {
+      console.error('Firecrawl search failed:', json);
+      return [];
+    }
+    return (json.data as Array<{ title: string; url: string; description: string }>).map(item => ({
+      title: item.title,
+      url: item.url,
+      description: item.description
+    }));
+  } catch (error) {
+    console.error('Error during Firecrawl search:', error);
+    return [];
+  }
+}
+
+async function scrapeUrlContent(url: string): Promise<string> {
+  try {
+    const res = await fetch(`${FIRECRAWL_API_URL}/scrape`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${FIRECRAWL_API_KEY}`
+      },
+      body: JSON.stringify({ 
+        url,
+        formats: ['markdown'],
+        onlyMainContent: true,
+        includeTags: ['p', 'h1', 'h2', 'h3', 'li', 'span'],
+        excludeTags: ['nav', 'footer', 'aside', 'header']
+      })
+    });
+    const json = await res.json();
+    if (!json.success) {
+      console.error('Firecrawl scrape failed for URL:', url, json);
+      return '';
+    }
+    return json.data?.markdown || json.data?.content || '';
+  } catch (error) {
+    console.error('Error scraping URL:', url, error);
+    return '';
+  }
+}
+
+async function scrapeAccommodationData(destination: string, checkIn: string, checkOut: string, budget: string): Promise<ScrapedAccommodationData[]> {
+  try {
+    console.log(`Scraping accommodation data for ${destination}...`);
+    
+    const searchResults = await fetchSearch(
+      `best hotels ${destination} ${budget} budget ${checkIn} to ${checkOut} prices reviews`,
+      5
+    );
+    
+    const accommodationData: ScrapedAccommodationData[] = [];
+    
+    for (const result of searchResults.slice(0, 2)) {
+      const content = await scrapeUrlContent(result.url);
+      if (content) {
+        const extractedData = await extractAccommodationDataFromContent(content, destination, budget);
+        if (extractedData.length > 0) {
+          accommodationData.push(...extractedData);
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    return accommodationData.slice(0, 5);
+  } catch (error) {
+    console.error('Error scraping accommodation data:', error);
+    return [];
+  }
+}
+
+async function extractAccommodationDataFromContent(content: string, destination: string, budget: string): Promise<ScrapedAccommodationData[]> {
+  try {
+    const prompt = `Extract accommodation information from this content for ${destination} with ${budget} budget. 
+    Content: ${content.substring(0, 3000)}
+    
+    Return JSON array of hotels with this structure:
+    [{"name": "Hotel Name", "priceRange": "$100-200/night", "rating": 4.5, "reviews": 1200, "amenities": ["WiFi", "Pool"], "location": "City Center", "availability": true}]
+    
+    Only return valid JSON array, no other text.`;
+    
+    const completion = await groq.chat.completions.create({
+      messages: [{ role: "user", content: prompt }],
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.1,
+      max_tokens: 1000,
+    });
+    
+    const response = completion.choices[0]?.message?.content || '';
+    const jsonMatch = response.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+    return [];
+  } catch (error) {
+    console.error('Error extracting accommodation data:', error);
+    return [];
+  }
+}
+
+async function scrapeRestaurantData(destination: string, budget: string): Promise<ScrapedRestaurantData[]> {
+  try {
+    console.log(`Scraping restaurant data for ${destination}...`);
+    
+    const searchResults = await fetchSearch(
+      `best restaurants ${destination} ${budget} budget local food reviews ratings`,
+      3
+    );
+    
+    const restaurantData: ScrapedRestaurantData[] = [];
+    
+    for (const result of searchResults.slice(0, 2)) {
+      const content = await scrapeUrlContent(result.url);
+      if (content) {
+        const extractedData = await extractRestaurantDataFromContent(content, destination, budget);
+        if (extractedData.length > 0) {
+          restaurantData.push(...extractedData);
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    return restaurantData.slice(0, 5);
+  } catch (error) {
+    console.error('Error scraping restaurant data:', error);
+    return [];
+  }
+}
+
+async function extractRestaurantDataFromContent(content: string, destination: string, budget: string): Promise<ScrapedRestaurantData[]> {
+  try {
+    const prompt = `Extract restaurant information from this content for ${destination} with ${budget} budget.
+    Content: ${content.substring(0, 3000)}
+    
+    Return JSON array of restaurants with this structure:
+    [{"name": "Restaurant Name", "cuisine": "Italian", "priceRange": "$$", "rating": 4.2, "reviews": 850, "specialties": ["Pasta", "Pizza"], "reservationRequired": true}]
+    
+    Only return valid JSON array, no other text.`;
+    
+    const completion = await groq.chat.completions.create({
+      messages: [{ role: "user", content: prompt }],
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.1,
+      max_tokens: 1000,
+    });
+    
+    const response = completion.choices[0]?.message?.content || '';
+    const jsonMatch = response.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+    return [];
+  } catch (error) {
+    console.error('Error extracting restaurant data:', error);
+    return [];
+  }
+}
+
+async function scrapeActivityData(destination: string, interests: string[], budget: string): Promise<ScrapedActivityData[]> {
+  try {
+    console.log(`Scraping activity data for ${destination}...`);
+    
+    const interestsQuery = interests.join(' ');
+    const searchResults = await fetchSearch(
+      `things to do ${destination} ${interestsQuery} activities ${budget} budget prices tickets`,
+      3
+    );
+    
+    const activityData: ScrapedActivityData[] = [];
+    
+    for (const result of searchResults.slice(0, 2)) {
+      const content = await scrapeUrlContent(result.url);
+      if (content) {
+        const extractedData = await extractActivityDataFromContent(content, destination, interests, budget);
+        if (extractedData.length > 0) {
+          activityData.push(...extractedData);
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    return activityData.slice(0, 5);
+  } catch (error) {
+    console.error('Error scraping activity data:', error);
+    return [];
+  }
+}
+
+async function extractActivityDataFromContent(content: string, destination: string, interests: string[], budget: string): Promise<ScrapedActivityData[]> {
+  try {
+    const prompt = `Extract activity information from this content for ${destination} matching interests: ${interests.join(', ')} with ${budget} budget.
+    Content: ${content.substring(0, 3000)}
+    
+    Return JSON array of activities with this structure:
+    [{"name": "Activity Name", "type": "Museum", "price": "$25", "duration": "2 hours", "rating": 4.3, "reviews": 650, "description": "Brief description", "bookingRequired": false}]
+    
+    Only return valid JSON array, no other text.`;
+    
+    const completion = await groq.chat.completions.create({
+      messages: [{ role: "user", content: prompt }],
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.1,
+      max_tokens: 1000,
+    });
+    
+    const response = completion.choices[0]?.message?.content || '';
+    const jsonMatch = response.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+    return [];
+  } catch (error) {
+    console.error('Error extracting activity data:', error);
+    return [];
+  }
+}
+
+async function scrapeLocalInsights(destination: string, travelDates: string): Promise<ScrapedLocalData> {
+  try {
+    console.log(`Scraping local insights for ${destination}...`);
+    
+    const searchResults = await fetchSearch(
+      `${destination} current events ${travelDates} local tips weather transport updates`,
+      2
+    );
+    
+    let combinedContent = '';
+    for (const result of searchResults) {
+      const content = await scrapeUrlContent(result.url);
+      combinedContent += content + '\n\n';
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    return await extractLocalDataFromContent(combinedContent, destination, travelDates);
+  } catch (error) {
+    console.error('Error scraping local insights:', error);
+    return {
+      currentEvents: [],
+      weatherTips: '',
+      localInsights: [],
+      transportUpdates: []
+    };
+  }
+}
+
+async function extractLocalDataFromContent(content: string, destination: string, travelDates: string): Promise<ScrapedLocalData> {
+  try {
+    const prompt = `Extract local insights from this content for ${destination} during ${travelDates}.
+    Content: ${content.substring(0, 4000)}
+    
+    Return JSON with this structure:
+    {
+      "currentEvents": [{"name": "Event Name", "date": "2024-01-15", "description": "Event description", "cost": "$20"}],
+      "weatherTips": "Weather information and what to pack",
+      "localInsights": ["Local tip 1", "Local tip 2"],
+      "transportUpdates": ["Transport update 1", "Transport update 2"]
+    }
+    
+    Only return valid JSON object, no other text.`;
+    
+    const completion = await groq.chat.completions.create({
+      messages: [{ role: "user", content: prompt }],
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.1,
+      max_tokens: 1500,
+    });
+    
+    const response = completion.choices[0]?.message?.content || '';
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+    
+    return {
+      currentEvents: [],
+      weatherTips: '',
+      localInsights: [],
+      transportUpdates: []
+    };
+  } catch (error) {
+    console.error('Error extracting local data:', error);
+    return {
+      currentEvents: [],
+      weatherTips: '',
+      localInsights: [],
+      transportUpdates: []
+    };
+  }
+}
+
+async function researchBookingLinks(query: string, limit = 5): Promise<BookingLink[]> {
+  const results = await fetchSearch(query, limit);
+  return results.map(r => ({
+    platform: r.title,
+    url: r.url,
+    description: r.description,
+    features: []
+  }));
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -30,6 +389,230 @@ export async function POST(request: NextRequest) {
       wantsLocalExperiences,
       wantsRestaurantReservations
     } = body;
+
+    console.log('🔍 Starting enhanced real-time data scraping...');
+    const scrapedData = {
+      accommodations: new Map<string, ScrapedAccommodationData[]>(),
+      restaurants: new Map<string, ScrapedRestaurantData[]>(),
+      activities: new Map<string, ScrapedActivityData[]>(),
+      localInsights: new Map<string, ScrapedLocalData>()
+    };
+
+    const scrapingPromises = destinations.map(async (dest: Destination) => {
+      const destName = dest.name;
+      console.log(`📍 Scraping data for ${destName}...`);
+      
+      try {
+        const [accommodationData, restaurantData, activityData, localData] = await Promise.all([
+          scrapeAccommodationData(destName, startDate, endDate, budget),
+          scrapeRestaurantData(destName, budget),
+          scrapeActivityData(destName, interests, budget),
+          scrapeLocalInsights(destName, `${startDate} to ${endDate}`)
+        ]);
+
+        scrapedData.accommodations.set(destName, accommodationData);
+        scrapedData.restaurants.set(destName, restaurantData);
+        scrapedData.activities.set(destName, activityData);
+        scrapedData.localInsights.set(destName, localData);
+        
+        console.log(`✅ Completed scraping for ${destName}`);
+      } catch (error) {
+        console.error(`❌ Error scraping data for ${destName}:`, error);
+        scrapedData.accommodations.set(destName, []);
+        scrapedData.restaurants.set(destName, []);
+        scrapedData.activities.set(destName, []);
+        scrapedData.localInsights.set(destName, {
+          currentEvents: [],
+          weatherTips: '',
+          localInsights: [],
+          transportUpdates: []
+        });
+      }
+    });
+
+    await Promise.all(scrapingPromises);
+    console.log('🎉 Real-time data scraping completed!');
+    
+    const enhancedContext = destinations.map((dest: Destination) => {
+      const destAccommodations = scrapedData.accommodations.get(dest.name) || [];
+      const destRestaurants = scrapedData.restaurants.get(dest.name) || [];
+      const destActivities = scrapedData.activities.get(dest.name) || [];
+      const destLocalData = scrapedData.localInsights.get(dest.name);
+
+      return `
+REAL-TIME DATA FOR ${dest.name.toUpperCase()}:
+
+CURRENT ACCOMMODATION OPTIONS (Live Data):
+${destAccommodations.map(acc => 
+  `- ${acc.name}: ${acc.priceRange}, Rating: ${acc.rating}/5 (${acc.reviews} reviews), Location: ${acc.location}, Amenities: ${acc.amenities.join(', ')}`
+).join('\n')}
+
+CURRENT RESTAURANT OPTIONS (Live Data):
+${destRestaurants.map(rest => 
+  `- ${rest.name}: ${rest.cuisine} cuisine, ${rest.priceRange}, Rating: ${rest.rating}/5 (${rest.reviews} reviews), Specialties: ${rest.specialties.join(', ')}, Reservations: ${rest.reservationRequired ? 'Required' : 'Not Required'}`
+).join('\n')}
+
+CURRENT ACTIVITIES & ATTRACTIONS (Live Data):
+${destActivities.map(act => 
+  `- ${act.name} (${act.type}): ${act.price}, Duration: ${act.duration}, Rating: ${act.rating}/5 (${act.reviews} reviews), Booking: ${act.bookingRequired ? 'Required' : 'Not Required'}`
+).join('\n')}
+
+LOCAL INSIGHTS & CURRENT CONDITIONS:
+Weather Tips: ${destLocalData?.weatherTips || 'Check current weather conditions'}
+Current Events: ${destLocalData?.currentEvents.map(event => `${event.name} (${event.date}): ${event.description} - ${event.cost}`).join(', ') || 'No major events found'}
+Local Tips: ${destLocalData?.localInsights.join(', ') || 'General travel tips apply'}
+Transport Updates: ${destLocalData?.transportUpdates.join(', ') || 'Standard transport options available'}
+      `.trim();
+    }).join('\n\n');
+
+    const enhanceItineraryWithScrapedData = (generatedItinerary: any): StructuredItinerary => {
+      if (!generatedItinerary || typeof generatedItinerary !== 'object') {
+        return generatedItinerary;
+      }
+
+      if (generatedItinerary.accommodation?.recommendations) {
+        generatedItinerary.accommodation.recommendations = generatedItinerary.accommodation.recommendations.map((rec: any) => {
+          const scrapedAccommodations = scrapedData.accommodations.get(rec.destination) || [];
+          
+          if (scrapedAccommodations.length > 0) {
+            rec.realTimeOptions = scrapedAccommodations.map(acc => ({
+              name: acc.name,
+              type: "Real-time data",
+              priceRange: acc.priceRange,
+              location: acc.location,
+              highlights: acc.amenities,
+              rating: `${acc.rating}/5 (${acc.reviews} reviews)`,
+              pros: acc.amenities.slice(0, 3),
+              cons: acc.rating < 4 ? ["Lower rating than premium options"] : ["Premium pricing"],
+              bestFor: acc.rating >= 4.5 ? "Luxury travelers" : acc.rating >= 4 ? "Comfort seekers" : "Budget travelers",
+              availability: acc.availability ? "Available for your dates" : "Limited availability",
+              scrapedData: true
+            }));
+          }
+          
+          return rec;
+        });
+      }
+
+      if (generatedItinerary.restaurants?.recommendations) {
+        generatedItinerary.restaurants.recommendations = destinations.map((dest: Destination) => {
+          const scrapedRestaurants = scrapedData.restaurants.get(dest.name) || [];
+          const existing = generatedItinerary.restaurants.recommendations.find((r: any) => r.destination === dest.name);
+          
+          if (scrapedRestaurants.length > 0) {
+            return {
+              destination: dest.name,
+              realTimeOptions: scrapedRestaurants.map(rest => ({
+                name: rest.name,
+                cuisine: rest.cuisine,
+                priceRange: rest.priceRange,
+                specialties: rest.specialties,
+                reservationRequired: rest.reservationRequired,
+                reservationInfo: rest.reservationRequired ? 
+                  (wantsRestaurantReservations ? 'Book 1-2 weeks in advance via phone or online' : 'Reservations recommended') : 
+                  'Walk-ins welcome',
+                dressCode: rest.priceRange === "$$$$" ? "Smart elegant" : rest.priceRange === "$$$" ? "Smart casual" : "Casual",
+                dietaryOptions: `Check with restaurant for ${dietaryRestrictions} options`,
+                rating: `${rest.rating}/5 (${rest.reviews} reviews)`,
+                scrapedData: true
+              })),
+              ...existing
+            };
+          }
+          
+          return existing;
+        }).filter(Boolean);
+      }
+
+      if (generatedItinerary.destinations) {
+        generatedItinerary.destinations = generatedItinerary.destinations.map((dest: any) => {
+          const scrapedActivities = scrapedData.activities.get(dest.name) || [];
+          
+          if (scrapedActivities.length > 0) {
+            dest.realTimeActivities = scrapedActivities.map(act => ({
+              name: act.name,
+              description: act.description,
+              duration: act.duration,
+              cost: act.price,
+              category: act.type.toLowerCase(),
+              bookingRequired: act.bookingRequired,
+              tips: `Rated ${act.rating}/5 by ${act.reviews} visitors`,
+              rating: `${act.rating}/5`,
+              reviews: act.reviews,
+              scrapedData: true
+            }));
+          }
+          
+          return dest;
+        });
+      }
+
+      if (generatedItinerary.itinerary?.days) {
+        generatedItinerary.itinerary.days = generatedItinerary.itinerary.days.map((day: any) => {
+          const destLocalData = scrapedData.localInsights.get(day.destination);
+          const destActivities = scrapedData.activities.get(day.destination) || [];
+          
+          if (destLocalData?.currentEvents && destLocalData.currentEvents.length > 0) {
+            const eventForDay = destLocalData.currentEvents.find(event => 
+              event.date === day.date || new Date(event.date).toDateString() === new Date(day.date).toDateString()
+            );
+            
+            if (eventForDay) {
+              day.activities.push({
+                time: "06:00 PM",
+                name: eventForDay.name,
+                description: `Current local event: ${eventForDay.description}`,
+                location: day.destination,
+                duration: "2-3 hours",
+                cost: eventForDay.cost,
+                tips: "This is a current local event happening during your visit - don't miss it!",
+                bookingRequired: eventForDay.cost !== "Free",
+                category: "current-event",
+                scrapedData: true
+              });
+            }
+          }
+
+          if (destActivities.length > 0) {
+            day.activities = day.activities.map((activity: any) => {
+              const matchingActivity = destActivities.find(scraped => 
+                scraped.name.toLowerCase().includes(activity.name.toLowerCase().split(' ')[0]) ||
+                activity.name.toLowerCase().includes(scraped.name.toLowerCase().split(' ')[0])
+              );
+              
+              if (matchingActivity) {
+                activity.cost = matchingActivity.price;
+                activity.tips = `${activity.tips} | Real rating: ${matchingActivity.rating}/5 (${matchingActivity.reviews} reviews)`;
+                activity.realRating = `${matchingActivity.rating}/5`;
+                activity.scrapedData = true;
+              }
+              
+              return activity;
+            });
+          }
+
+          if (destLocalData?.localInsights && destLocalData.localInsights.length > 0) {
+            day.localTips = destLocalData.localInsights.slice(0, 2);
+          }
+
+          return day;
+        });
+      }
+
+      generatedItinerary.realTimeInsights = destinations.map((dest: Destination) => {
+        const localData = scrapedData.localInsights.get(dest.name);
+        return {
+          destination: dest.name,
+          weatherTips: localData?.weatherTips || '',
+          currentEvents: localData?.currentEvents || [],
+          localTips: localData?.localInsights || [],
+          transportUpdates: localData?.transportUpdates || [],
+          scrapedAt: new Date().toISOString()
+        };
+      });
+
+      return generatedItinerary;
+    };
 
     
     const start = new Date(startDate);
@@ -135,7 +718,7 @@ INTERACTIVE PREFERENCES:
 - Restaurant Reservations: ${wantsRestaurantReservations ? 'YES - Include restaurant recommendations with reservation details, contact info, and booking timelines' : 'NO - General dining suggestions'}`;
 
     
-    const prompt = `Create a detailed ${tripDuration}-day travel itinerary in JSON format that STRICTLY RESPECTS the budget constraints.
+    const prompt = `Create a detailed ${tripDuration}-day travel itinerary in JSON format that STRICTLY RESPECTS the budget constraints and INCORPORATES the real-time scraped data provided below.
 
 TRIP DETAILS:
 - Departure: ${departureLocation || 'Not specified'}
@@ -159,6 +742,21 @@ BUDGET CONSTRAINTS (MUST BE RESPECTED):
 - Budget Tips: ${budgetGuidance.tips}
 
 ${interactivePreferences}
+
+🔥 REAL-TIME SCRAPED DATA (PRIORITY - USE THIS DATA):
+${enhancedContext}
+
+IMPORTANT: Use the real-time scraped data above to:
+1. Include actual hotel names, prices, and ratings from the scraped accommodation data
+2. Incorporate real restaurant names, cuisines, and pricing from the scraped restaurant data  
+3. Use actual activity names, costs, and ratings from the scraped activity data
+4. Include current events happening during the travel dates
+5. Incorporate current weather tips and local insights
+6. Use real pricing information to ensure budget accuracy
+7. Mention specific amenities, ratings, and review counts from scraped data
+8. Include any transport updates or local tips from scraped data
+
+The scraped data should take PRIORITY over generic recommendations. If real pricing is available, use those exact prices. If real hotels/restaurants are found, prioritize them in recommendations.
 
 ENHANCED REQUIREMENTS:
 1. Include ALL ${tripDuration} days in itinerary.days array
@@ -498,7 +1096,7 @@ Return ONLY valid JSON in this EXACT structure:
       console.error("Raw response preview:", itineraryResponse.substring(0, 500) + "...");
       
       
-      const fallbackItinerary = {
+      const fallbackItinerary: Partial<StructuredItinerary> = {
         overview: `Experience an extraordinary ${tripDuration}-day luxury journey through ${destinationList}. This meticulously crafted itinerary combines ${travelStyle} travel with premium experiences focused on ${interests.join(', ')}, ensuring an unforgettable adventure tailored to your sophisticated preferences.`,
         destinations: destinations.map((dest: Destination) => ({
           name: dest.name,
@@ -740,7 +1338,70 @@ Return ONLY valid JSON in this EXACT structure:
         ]
       };
       
-      return NextResponse.json(fallbackItinerary);
+      const bookingLinks: BookingLinks = {};
+      const primaryDest = destinations[0]?.name || '';
+      if (wantsHotelRecommendations && primaryDest) {
+        bookingLinks.hotels = await researchBookingLinks(
+          `best hotel booking links for ${primaryDest} from ${startDate} to ${endDate} for ${travelers} guests with ${budget} budget`
+        );
+      }
+      if (wantsFlightBooking && departureLocation && primaryDest) {
+        bookingLinks.flights = await researchBookingLinks(
+          `best flight booking links from ${departureLocation} to ${primaryDest} departing ${startDate} returning ${endDate} for ${travelers} passengers`
+        );
+      }
+      if (primaryDest) {
+        bookingLinks.cars = await researchBookingLinks(
+          `best car rental booking links in ${primaryDest} from ${startDate} to ${endDate}`
+        );
+      }
+      if (wantsLocalExperiences && primaryDest) {
+        bookingLinks.activities = await researchBookingLinks(
+          `best activity booking links in ${primaryDest} between ${startDate} and ${endDate} within ${budget} budget`
+        );
+      }
+      if (wantsRestaurantReservations && primaryDest) {
+        bookingLinks.restaurants = await researchBookingLinks(
+          `best restaurant reservation links in ${primaryDest} for ${travelers} guests between ${startDate} and ${endDate}`
+        );
+      }
+      fallbackItinerary.bookingLinks = bookingLinks;
+      
+      const enhancedFallback = enhanceItineraryWithScrapedData(fallbackItinerary);
+      
+      return NextResponse.json(enhancedFallback);
+    }
+
+    const bookingLinks: BookingLinks = {};
+    const primaryDest = destinations[0]?.name || '';
+    if (wantsHotelRecommendations && primaryDest) {
+      bookingLinks.hotels = await researchBookingLinks(
+        `best hotel booking links for ${primaryDest} from ${startDate} to ${endDate} for ${travelers} guests with ${budget} budget`
+      );
+    }
+    if (wantsFlightBooking && departureLocation && primaryDest) {
+      bookingLinks.flights = await researchBookingLinks(
+        `best flight booking links from ${departureLocation} to ${primaryDest} departing ${startDate} returning ${endDate} for ${travelers} passengers`
+      );
+    }
+    if (primaryDest) {
+      bookingLinks.cars = await researchBookingLinks(
+        `best car rental booking links in ${primaryDest} from ${startDate} to ${endDate}`
+      );
+    }
+    if (wantsLocalExperiences && primaryDest) {
+      bookingLinks.activities = await researchBookingLinks(
+        `best activity booking links in ${primaryDest} between ${startDate} and ${endDate} within ${budget} budget`
+      );
+    }
+    if (wantsRestaurantReservations && primaryDest) {
+      bookingLinks.restaurants = await researchBookingLinks(
+        `best restaurant reservation links in ${primaryDest} for ${travelers} guests between ${startDate} and ${endDate}`
+      );
+    }
+    if (typeof itineraryData === 'object' && itineraryData !== null) {
+      itineraryData = enhanceItineraryWithScrapedData(itineraryData);
+      itineraryData.bookingLinks = bookingLinks;
     }
 
     return NextResponse.json(itineraryData);

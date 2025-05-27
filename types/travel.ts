@@ -20,6 +20,21 @@ export interface TravelFormData {
   additionalNotes: string;
 }
 
+export interface BookingLink {
+  platform: string;
+  url: string;
+  description: string;
+  features: string[];
+}
+
+export interface BookingLinks {
+  hotels?: BookingLink[];
+  flights?: BookingLink[];
+  cars?: BookingLink[];
+  activities?: BookingLink[];
+  restaurants?: BookingLink[];
+}
+
 export interface StructuredItinerary {
   overview: string;
   destinations: Array<{
@@ -226,5 +241,19 @@ export interface StructuredItinerary {
     timeframe: string;
     priority: string;
     notes: string;
+  }>;
+  bookingLinks?: BookingLinks;
+  realTimeInsights?: Array<{
+    destination: string;
+    weatherTips: string;
+    currentEvents: Array<{
+      name: string;
+      date: string;
+      description: string;
+      cost: string;
+    }>;
+    localTips: string[];
+    transportUpdates: string[];
+    scrapedAt: string;
   }>;
 } 
