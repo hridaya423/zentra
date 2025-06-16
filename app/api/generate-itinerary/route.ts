@@ -4,7 +4,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { Groq } from 'groq-sdk';
-import { discoverUniqueActivities } from '../discover-activities/route';
 import { getWeatherData } from '../weather/route';
 import { getPlacesData } from '../places/route';
 import { Destination, BookingLinks, StructuredItinerary, BookingLink } from '@/types/travel';
@@ -424,6 +423,33 @@ async function researchBookingLinks(query: string, limit = 5): Promise<BookingLi
   }));
 }
 
+// Add a new function to call the discover-activities API directly
+async function fetchUniqueActivities(destination: string, interests: string[], travelStyle: string): Promise<any[]> {
+  try {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/discover-activities`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        destination,
+        interests,
+        travelStyle,
+      }),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API returned status ${response.status}`);
+    }
+    
+    const result = await response.json();
+    return result.activities || [];
+  } catch (error) {
+    console.error('Error fetching unique activities:', error);
+    return [];
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const data = await request.json();
@@ -513,23 +539,17 @@ export async function POST(request: NextRequest) {
       console.log(`Scraping data for ${destName}...`);
       
       try {
-        
-        const uniqueActivitiesPromise = discoverUniqueActivities(
+        const uniqueActivitiesPromise = fetchUniqueActivities(
           destName,
           interests || [],
           travelStyle || 'balanced'
-        ).then(result => result.activities || []).catch(err => {
-          console.error('Error discovering unique activities:', err);
-          return [];
-        });
+        );
 
-        
         const weatherPromise = getWeatherData(destName).catch(err => {
           console.error('Error fetching weather:', err);
           return null;
         });
 
-        
         const placesPromise = getPlacesData(destName, interests || []).catch(err => {
           console.error('Error fetching places:', err);
           return null;
@@ -1551,7 +1571,7 @@ You understand that exceptional travel planning anticipates needs, provides alte
           console.log(`Retrying itinerary generation (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
           
           
-          const retryPrompt = `I need a valid JSON itinerary for a ${tripDuration}-day trip to ${destinations.map(d => d.name).join(', ')}. 
+          const retryPrompt = `I need a valid JSON itinerary for a ${tripDuration}-day trip to ${destinations.map((d: Destination) => d.name).join(', ')}. 
 The traveler is interested in ${interests.join(', ')}. 
 Budget level: ${budget}.
 Travel style: ${travelStyle}.
