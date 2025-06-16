@@ -6,6 +6,7 @@ import ItineraryDisplay from '@/components/ItineraryDisplay';
 import TravelAssistantChat from '@/components/TravelAssistantChat';
 import { Destination, TravelFormData, StructuredItinerary } from '@/types/travel';
 import { useSearchParams } from 'next/navigation';
+import React, { Suspense } from 'react';
 
 const TRAVEL_STYLES = [
   { value: 'relaxed', label: 'Relaxed - Plenty of downtime', icon: '🧘', description: 'Slow-paced with time to unwind' },
@@ -78,7 +79,9 @@ interface ActivityData {
   duration?: string;
 }
 
-export default function PlannerPage() {
+function PlannerPageClient() {
+  'use client';
+
   const searchParams = useSearchParams();
   const destinationParam = searchParams.get('destination');
   
@@ -2153,3 +2156,11 @@ For example: I want a romantic 7-day trip to Europe with beautiful architecture,
     </div>
   );
 } 
+
+export default function PlannerPage() {
+  return (
+    <Suspense fallback={<div>Loading planner...</div>}>
+      <PlannerPageClient />
+    </Suspense>
+  );
+}
