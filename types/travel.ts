@@ -32,11 +32,34 @@ export interface BookingLinks {
   flights?: BookingLink[];
   cars?: BookingLink[];
   activities?: BookingLink[];
-  restaurants?: BookingLink[];
+}
+
+export interface UnsplashImage {
+  id: string;
+  urls: {
+    raw: string;
+    full: string;
+    regular: string;
+    small: string;
+    thumb: string;
+  };
+  alt_description: string;
+  description: string;
 }
 
 export interface StructuredItinerary {
   overview: string;
+  tripHighlights: Array<{
+    name: string;
+    description: string;
+    image?: UnsplashImage;
+  }>;
+  culturalTips: {
+    etiquette: string[];
+    customs: string[];
+    language: string[];
+    safety: string[];
+  };
   destinations: Array<{
     name: string;
     description: string;
@@ -45,14 +68,20 @@ export interface StructuredItinerary {
     localCurrency: string;
     languages: string;
     timeZone?: string;
+    heroImage?: UnsplashImage;
     activities: Array<{
       name: string;
       description: string;
       duration: string;
       cost: string;
       category: string;
+      location: string;
+      walkingDistanceFromPrevious?: string;
+      transportTime?: string;
+      timeOfDay: 'morning' | 'afternoon' | 'evening' | 'night';
       bookingRequired?: boolean;
       tips?: string;
+      image?: UnsplashImage;
     }>;
   }>;
   transport: {
@@ -140,19 +169,6 @@ export interface StructuredItinerary {
       cons?: string[];
     }>;
   };
-  restaurants?: {
-    recommendations: Array<{
-      destination: string;
-      name: string;
-      cuisine: string;
-      priceRange: string;
-      specialties: string[];
-      reservationRequired: boolean;
-      reservationInfo?: string;
-      dressCode?: string;
-      dietaryOptions?: string;
-    }>;
-  };
   localExperiences?: {
     unique: Array<{
       name: string;
@@ -185,10 +201,10 @@ export interface StructuredItinerary {
       meals?: Array<{
         time: string;
         type: string;
-        restaurant: string;
+        suggestion: string;
         cuisine: string;
         cost: string;
-        reservationNeeded?: boolean;
+        notes?: string;
       }>;
       transport?: string;
       accommodation?: string;

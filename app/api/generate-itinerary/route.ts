@@ -1,7 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-unused-vars */
+
+
 import { NextRequest, NextResponse } from 'next/server';
 import { Groq } from 'groq-sdk';
+import { discoverUniqueActivities } from '../discover-activities/route';
+import { getWeatherData } from '../weather/route';
+import { getPlacesData } from '../places/route';
 import { Destination, BookingLinks, StructuredItinerary, BookingLink } from '@/types/travel';
+import { extractJSONFromResponse } from '@/lib/utils/ai-response-filter';
 
 
 const groq = new Groq({
@@ -21,15 +28,7 @@ interface ScrapedAccommodationData {
   availability: boolean;
 }
 
-interface ScrapedRestaurantData {
-  name: string;
-  cuisine: string;
-  priceRange: string;
-  rating: number;
-  reviews: number;
-  specialties: string[];
-  reservationRequired: boolean;
-}
+
 
 interface ScrapedActivityData {
   name: string;
@@ -139,25 +138,58 @@ async function scrapeAccommodationData(destination: string, checkIn: string, che
 
 async function extractAccommodationDataFromContent(content: string, destination: string, budget: string): Promise<ScrapedAccommodationData[]> {
   try {
-    const prompt = `Extract accommodation information from this content for ${destination} with ${budget} budget. 
-    Content: ${content.substring(0, 3000)}
-    
-    Return JSON array of hotels with this structure:
-    [{"name": "Hotel Name", "priceRange": "$100-200/night", "rating": 4.5, "reviews": 1200, "amenities": ["WiFi", "Pool"], "location": "City Center", "availability": true}]
-    
-    Only return valid JSON array, no other text.`;
+    const prompt = `ROLE: You are a professional accommodation data analyst specializing in extracting precise, current hotel information for ${budget} budget travelers in ${destination}.
+
+EXPERTISE: 
+- Real-time accommodation pricing and availability
+- Budget-appropriate accommodation matching
+- Amenity identification and classification
+- Location analysis and neighborhood assessment
+- Review sentiment and rating analysis
+
+TASK: Extract comprehensive accommodation data from the provided content, focusing on options that align with ${budget} budget level and current market conditions.
+
+CONTENT TO ANALYZE:
+${content.substring(0, 3000)}
+
+EXTRACTION CRITERIA FOR ${destination}:
+✓ Properties appropriate for ${budget} budget level
+✓ Current pricing and availability status
+✓ Accurate amenity lists and location details
+✓ Real review counts and rating information
+✓ Neighborhood context and accessibility
+
+BUDGET ALIGNMENT FOR ${budget}:
+- Budget: Focus on hostels, guesthouses, basic hotels ($20-80/night)
+- Mid-range: 3-4 star hotels, boutique properties ($80-200/night)
+- Premium/Luxury: 4-5 star hotels, luxury resorts ($200-500+/night)
+
+OUTPUT FORMAT - Return ONLY this JSON array:
+[{"name": "Actual property name from content", "priceRange": "Realistic price range for budget level", "rating": actual_rating_number, "reviews": actual_review_count, "amenities": ["Verified amenity list"], "location": "Specific neighborhood or area", "availability": true_or_false_based_on_content}]`;
     
     const completion = await groq.chat.completions.create({
-      messages: [{ role: "user", content: prompt }],
-      model: "llama-3.3-70b-versatile",
+      messages: [
+        { 
+          role: "system", 
+          content: "You are a professional accommodation data analyst with expertise in hospitality market intelligence, pricing analysis, and property assessment. You specialize in extracting accurate, current accommodation information that matches specific budget requirements and traveler needs. Your analysis considers location desirability, amenity value, pricing trends, and guest satisfaction metrics. You respond with ONLY valid JSON - no explanations, no reasoning, no thinking blocks." 
+        },
+        { role: "user", content: prompt }
+      ],
+      model: "deepseek-r1-distill-llama-70b",
       temperature: 0.1,
       max_tokens: 1000,
     });
     
     const response = completion.choices[0]?.message?.content || '';
-    const jsonMatch = response.match(/\[[\s\S]*\]/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+    const jsonString = extractJSONFromResponse(response);
+    if (jsonString) {
+      try {
+        const parsed = JSON.parse(jsonString);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (parseError) {
+        console.error('JSON parse error for accommodation data:', parseError, 'Raw response:', response.substring(0, 200));
+        return [];
+      }
     }
     return [];
   } catch (error) {
@@ -166,63 +198,9 @@ async function extractAccommodationDataFromContent(content: string, destination:
   }
 }
 
-async function scrapeRestaurantData(destination: string, budget: string): Promise<ScrapedRestaurantData[]> {
-  try {
-    console.log(`Scraping restaurant data for ${destination}...`);
-    
-    const searchResults = await fetchSearch(
-      `best restaurants ${destination} ${budget} budget local food reviews ratings`,
-      3
-    );
-    
-    const restaurantData: ScrapedRestaurantData[] = [];
-    
-    for (const result of searchResults.slice(0, 2)) {
-      const content = await scrapeUrlContent(result.url);
-      if (content) {
-        const extractedData = await extractRestaurantDataFromContent(content, destination, budget);
-        if (extractedData.length > 0) {
-          restaurantData.push(...extractedData);
-        }
-      }
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-    
-    return restaurantData.slice(0, 5);
-  } catch (error) {
-    console.error('Error scraping restaurant data:', error);
-    return [];
-  }
-}
 
-async function extractRestaurantDataFromContent(content: string, destination: string, budget: string): Promise<ScrapedRestaurantData[]> {
-  try {
-    const prompt = `Extract restaurant information from this content for ${destination} with ${budget} budget.
-    Content: ${content.substring(0, 3000)}
-    
-    Return JSON array of restaurants with this structure:
-    [{"name": "Restaurant Name", "cuisine": "Italian", "priceRange": "$$", "rating": 4.2, "reviews": 850, "specialties": ["Pasta", "Pizza"], "reservationRequired": true}]
-    
-    Only return valid JSON array, no other text.`;
-    
-    const completion = await groq.chat.completions.create({
-      messages: [{ role: "user", content: prompt }],
-      model: "llama-3.3-70b-versatile",
-      temperature: 0.1,
-      max_tokens: 1000,
-    });
-    
-    const response = completion.choices[0]?.message?.content || '';
-    const jsonMatch = response.match(/\[[\s\S]*\]/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-    return [];
-  } catch (error) {
-    console.error('Error extracting restaurant data:', error);
-    return [];
-  }
-}
+
+
 
 async function scrapeActivityData(destination: string, interests: string[], budget: string): Promise<ScrapedActivityData[]> {
   try {
@@ -256,25 +234,60 @@ async function scrapeActivityData(destination: string, interests: string[], budg
 
 async function extractActivityDataFromContent(content: string, destination: string, interests: string[], budget: string): Promise<ScrapedActivityData[]> {
   try {
-    const prompt = `Extract activity information from this content for ${destination} matching interests: ${interests.join(', ')} with ${budget} budget.
-    Content: ${content.substring(0, 3000)}
-    
-    Return JSON array of activities with this structure:
-    [{"name": "Activity Name", "type": "Museum", "price": "$25", "duration": "2 hours", "rating": 4.3, "reviews": 650, "description": "Brief description", "bookingRequired": false}]
-    
-    Only return valid JSON array, no other text.`;
+    const prompt = `ROLE: You are a destination activity specialist and experience curator for ${destination}, with deep expertise in matching activities to traveler interests and budget constraints.
+
+SPECIALIZATION:
+- Activity pricing analysis and budget optimization for ${budget} travelers
+- Interest-based experience matching for: ${interests.join(', ')}
+- Duration planning and logistics coordination
+- Booking requirement assessment and timing strategies
+- Review analysis and quality assessment
+
+MISSION: Extract and curate activity data from provided content, focusing on experiences that align with ${budget} budget level and specific interests: ${interests.join(', ')}.
+
+CONTENT TO ANALYZE:
+${content.substring(0, 3000)}
+
+CURATION CRITERIA FOR ${destination}:
+✓ Strong alignment with interests: ${interests.join(', ')}
+✓ Appropriate for ${budget} budget level
+✓ Realistic duration and timing information
+✓ Accurate pricing and booking requirements
+✓ Quality verification through ratings/reviews
+✓ Authentic local experiences preferred
+
+BUDGET ALIGNMENT FOR ${budget}:
+- Budget: Free to low-cost activities ($0-30), local experiences, self-guided
+- Mid-range: Standard attractions and experiences ($30-100), some guided tours
+- Premium: High-end experiences ($100-300+), private tours, exclusive access
+- Luxury: Ultra-premium experiences ($300+), VIP access, bespoke services
+
+OUTPUT FORMAT - Return ONLY this JSON array:
+[{"name": "Specific activity name from content", "type": "Accurate category/type", "price": "Realistic price for budget", "duration": "Actual duration stated", "rating": actual_rating_number, "reviews": actual_review_count, "description": "Compelling description highlighting unique aspects", "bookingRequired": true_or_false_based_on_content}]`;
     
     const completion = await groq.chat.completions.create({
-      messages: [{ role: "user", content: prompt }],
-      model: "llama-3.3-70b-versatile",
+      messages: [
+        { 
+          role: "system", 
+          content: "You are a professional activity and experience analyst with expertise in destination-specific attractions, pricing intelligence, and traveler preference matching. You specialize in extracting accurate activity information that aligns with specific interests and budget constraints. Your analysis considers activity quality, booking logistics, pricing accuracy, and authentic local experiences. You respond with ONLY valid JSON - no explanations, no reasoning, no thinking blocks." 
+        },
+        { role: "user", content: prompt }
+      ],
+      model: "deepseek-r1-distill-llama-70b",
       temperature: 0.1,
       max_tokens: 1000,
     });
     
     const response = completion.choices[0]?.message?.content || '';
-    const jsonMatch = response.match(/\[[\s\S]*\]/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+    const jsonString = extractJSONFromResponse(response);
+    if (jsonString) {
+      try {
+        const parsed = JSON.parse(jsonString);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (parseError) {
+        console.error('JSON parse error for activity data:', parseError, 'Raw response:', response.substring(0, 200));
+        return [];
+      }
     }
     return [];
   } catch (error) {
@@ -313,30 +326,75 @@ async function scrapeLocalInsights(destination: string, travelDates: string): Pr
 
 async function extractLocalDataFromContent(content: string, destination: string, travelDates: string): Promise<ScrapedLocalData> {
   try {
-    const prompt = `Extract local insights from this content for ${destination} during ${travelDates}.
-    Content: ${content.substring(0, 4000)}
-    
-    Return JSON with this structure:
-    {
-      "currentEvents": [{"name": "Event Name", "date": "2024-01-15", "description": "Event description", "cost": "$20"}],
-      "weatherTips": "Weather information and what to pack",
-      "localInsights": ["Local tip 1", "Local tip 2"],
-      "transportUpdates": ["Transport update 1", "Transport update 2"]
-    }
-    
-    Only return valid JSON object, no other text.`;
+    const prompt = `ROLE: You are a local destination intelligence specialist for ${destination} with deep knowledge of current events, seasonal considerations, and practical travel logistics.
+
+EXPERTISE AREAS:
+- Current events and cultural happenings in ${destination}
+- Weather patterns and seasonal travel considerations
+- Local transportation systems and current updates
+- Insider tips and authentic local knowledge
+- Cultural customs and practical travel advice
+
+MISSION: Extract comprehensive local intelligence from the provided content to help travelers navigate ${destination} during ${travelDates} with insider knowledge and current information.
+
+CONTENT TO ANALYZE:
+${content.substring(0, 4000)}
+
+EXTRACTION PRIORITIES FOR ${destination} DURING ${travelDates}:
+✓ Current events, festivals, and cultural happenings during travel dates
+✓ Weather-specific advice and packing recommendations
+✓ Transportation updates, strikes, or service changes
+✓ Local customs, etiquette, and cultural considerations
+✓ Safety updates and practical travel tips
+✓ Seasonal considerations and timing advice
+
+INTELLIGENCE CATEGORIES:
+- Current Events: Festivals, exhibitions, concerts, local celebrations happening during travel dates
+- Weather Tips: Seasonal clothing advice, weather patterns, what to pack
+- Local Insights: Cultural tips, customs, local secrets, neighborhood advice
+- Transport Updates: Service changes, strikes, new routes, payment methods
+
+OUTPUT FORMAT - Return ONLY this JSON structure:
+{
+  "currentEvents": [{"name": "Specific event name", "date": "YYYY-MM-DD", "description": "Detailed event description with cultural significance", "cost": "Realistic cost or 'Free'"}],
+  "weatherTips": "Comprehensive weather advice and packing recommendations for the season",
+  "localInsights": ["Specific cultural tip or local secret", "Practical advice for authentic experiences"],
+  "transportUpdates": ["Current transport information", "Payment methods and practical tips"]
+}`;
     
     const completion = await groq.chat.completions.create({
-      messages: [{ role: "user", content: prompt }],
-      model: "llama-3.3-70b-versatile",
+      messages: [
+        { 
+          role: "system", 
+          content: "You are a local destination intelligence specialist with comprehensive knowledge of cultural events, seasonal travel patterns, transportation systems, and authentic local experiences. You excel at extracting current, actionable travel intelligence that helps visitors navigate destinations like locals. Your expertise covers cultural customs, practical logistics, safety considerations, and insider knowledge. You respond with ONLY valid JSON - no explanations, no reasoning, no thinking blocks." 
+        },
+        { role: "user", content: prompt }
+      ],
+      model: "deepseek-r1-distill-llama-70b",
       temperature: 0.1,
       max_tokens: 1500,
     });
     
     const response = completion.choices[0]?.message?.content || '';
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+    const jsonString = extractJSONFromResponse(response);
+    if (jsonString) {
+      try {
+        const parsed = JSON.parse(jsonString);
+        return parsed && typeof parsed === 'object' ? parsed : {
+          currentEvents: [],
+          weatherTips: '',
+          localInsights: [],
+          transportUpdates: []
+        };
+      } catch (parseError) {
+        console.error('JSON parse error for local data:', parseError, 'Raw response:', response.substring(0, 200));
+        return {
+          currentEvents: [],
+          weatherTips: '',
+          localInsights: [],
+          transportUpdates: []
+        };
+      }
     }
     
     return {
@@ -368,59 +426,139 @@ async function researchBookingLinks(query: string, limit = 5): Promise<BookingLi
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const data = await request.json();
+    
+    
+    const validateDate = (dateString: string) => {
+      if (!dateString) return false;
+      const date = new Date(dateString);
+      return !isNaN(date.getTime());
+    };
+    
+    
+    const hasValidDates = validateDate(data.startDate) && validateDate(data.endDate);
+    if (!hasValidDates) {
+      return NextResponse.json({ error: 'Invalid date format provided. Please use YYYY-MM-DD format.' }, { status: 400 });
+    }
+    
     
     const {
-      departureLocation,
       destinations,
       startDate,
       endDate,
       travelers,
       budget,
+      maxBudget,
       travelStyle,
       interests,
+      additionalNotes,
+      departureLocation,
       accommodation,
       transportPreference,
-      maxBudget,
       dietaryRestrictions,
-      additionalNotes,
-      wantsHotelRecommendations,
-      wantsFlightBooking,
-      wantsLocalExperiences,
-      wantsRestaurantReservations
-    } = body;
+      accessibility,
+      wantsHotelRecommendations = true,
+      wantsFlightBooking = true,
+      wantsLocalExperiences = true,
+      comprehensiveData
+    } = data;
 
-    console.log('🔍 Starting enhanced real-time data scraping...');
     const scrapedData = {
       accommodations: new Map<string, ScrapedAccommodationData[]>(),
-      restaurants: new Map<string, ScrapedRestaurantData[]>(),
       activities: new Map<string, ScrapedActivityData[]>(),
-      localInsights: new Map<string, ScrapedLocalData>()
+      localInsights: new Map<string, ScrapedLocalData>(),
+      uniqueActivities: new Map<string, any[]>(),
+      weatherData: new Map<string, any>(),
+      placesData: new Map<string, any>()
     };
 
+    
+    if (comprehensiveData && Array.isArray(comprehensiveData)) {
+      console.log('🚀 Using pre-gathered comprehensive data from enhanced quick mode...');
+      
+      
+      comprehensiveData.forEach((destData: any) => {
+        const destName = destData.destination;
+        
+        
+        scrapedData.weatherData.set(destName, destData.weatherData);
+        scrapedData.placesData.set(destName, destData.placesData);
+        scrapedData.uniqueActivities.set(destName, destData.uniqueActivities || []);
+        
+        
+        const aiInsights = destData.aiSuggestions;
+        scrapedData.localInsights.set(destName, {
+          currentEvents: aiInsights?.localEvents || [],
+          weatherTips: destData.weatherData?.travelTips?.[0] || aiInsights?.seasonalAdvice?.[0] || '',
+          localInsights: [
+            ...(aiInsights?.hiddenGems || []),
+            ...(aiInsights?.culturalTips || []),
+            ...(aiInsights?.transportTips || [])
+          ],
+          transportUpdates: aiInsights?.transportTips || []
+        });
+        
+        
+        scrapedData.accommodations.set(destName, []);
+        scrapedData.activities.set(destName, []);
+      });
+      
+   
+    } 
+
+    
+    if (!comprehensiveData || !Array.isArray(comprehensiveData)) {
     const scrapingPromises = destinations.map(async (dest: Destination) => {
       const destName = dest.name;
-      console.log(`📍 Scraping data for ${destName}...`);
+      console.log(`Scraping data for ${destName}...`);
       
       try {
-        const [accommodationData, restaurantData, activityData, localData] = await Promise.all([
+        
+        const uniqueActivitiesPromise = discoverUniqueActivities(
+          destName,
+          interests || [],
+          travelStyle || 'balanced'
+        ).then(result => result.activities || []).catch(err => {
+          console.error('Error discovering unique activities:', err);
+          return [];
+        });
+
+        
+        const weatherPromise = getWeatherData(destName).catch(err => {
+          console.error('Error fetching weather:', err);
+          return null;
+        });
+
+        
+        const placesPromise = getPlacesData(destName, interests || []).catch(err => {
+          console.error('Error fetching places:', err);
+          return null;
+        });
+
+        const [accommodationData, activityData, localData, uniqueActivities, weatherData, placesData] = await Promise.all([
           scrapeAccommodationData(destName, startDate, endDate, budget),
-          scrapeRestaurantData(destName, budget),
           scrapeActivityData(destName, interests, budget),
-          scrapeLocalInsights(destName, `${startDate} to ${endDate}`)
+          scrapeLocalInsights(destName, `${startDate} to ${endDate}`),
+          uniqueActivitiesPromise,
+          weatherPromise,
+          placesPromise
         ]);
 
         scrapedData.accommodations.set(destName, accommodationData);
-        scrapedData.restaurants.set(destName, restaurantData);
         scrapedData.activities.set(destName, activityData);
         scrapedData.localInsights.set(destName, localData);
+        scrapedData.uniqueActivities.set(destName, uniqueActivities);
+        scrapedData.weatherData.set(destName, weatherData);
+        scrapedData.placesData.set(destName, placesData);
         
-        console.log(`✅ Completed scraping for ${destName}`);
+        console.log(`Completed data collection for ${destName}. Found ${uniqueActivities.length} unique activities, weather: ${weatherData ? 'available' : 'unavailable'}, places: ${placesData?.places?.length || 0} found.`);
       } catch (error) {
-        console.error(`❌ Error scraping data for ${destName}:`, error);
+        console.error(`Error collecting data for ${destName}:`, error);
         scrapedData.accommodations.set(destName, []);
-        scrapedData.restaurants.set(destName, []);
         scrapedData.activities.set(destName, []);
+        scrapedData.uniqueActivities.set(destName, []);
+        scrapedData.weatherData.set(destName, null);
+        scrapedData.placesData.set(destName, null);
         scrapedData.localInsights.set(destName, {
           currentEvents: [],
           weatherTips: '',
@@ -431,47 +569,78 @@ export async function POST(request: NextRequest) {
     });
 
     await Promise.all(scrapingPromises);
-    console.log('🎉 Real-time data scraping completed!');
+    } 
     
     const enhancedContext = destinations.map((dest: Destination) => {
       const destAccommodations = scrapedData.accommodations.get(dest.name) || [];
-      const destRestaurants = scrapedData.restaurants.get(dest.name) || [];
       const destActivities = scrapedData.activities.get(dest.name) || [];
+      const destUniqueActivities = scrapedData.uniqueActivities.get(dest.name) || [];
       const destLocalData = scrapedData.localInsights.get(dest.name);
+      const destWeatherData = scrapedData.weatherData.get(dest.name);
+      const destPlacesData = scrapedData.placesData.get(dest.name);
 
       return `
 REAL-TIME DATA FOR ${dest.name.toUpperCase()}:
 
+🌤️ CURRENT WEATHER CONDITIONS (OpenWeatherMap API - CRITICAL FOR PLANNING):
+${destWeatherData ? `
+Current: ${destWeatherData.current.temperature}°C, ${destWeatherData.current.description}
+Humidity: ${destWeatherData.current.humidity}%, Wind: ${destWeatherData.current.windSpeed} km/h
+5-Day Forecast: ${destWeatherData.forecast.map((day: any) => 
+  `${day.date}: ${day.temperature.min}-${day.temperature.max}°C, ${day.description} (${day.precipitation}% rain)`
+).join(' | ')}
+Packing Recommendations: ${destWeatherData.packingRecommendations.join(', ')}
+Travel Tips: ${destWeatherData.travelTips.join(', ')}` : 'Weather data unavailable - check local conditions'}
+
+🏛️ VERIFIED PLACES & ATTRACTIONS (Foursquare API - REAL RATINGS & LOCATIONS):
+${destPlacesData?.places ? `
+Top Attractions: ${destPlacesData.categories.attractions.slice(0, 5).map((place: any) => 
+  `${place.name} (${place.rating ? place.rating + '/10' : 'No rating'}) - ${place.address}`
+).join(' | ')}
+Best Dining: ${destPlacesData.categories.dining.slice(0, 3).map((place: any) => 
+  `${place.name} (${place.rating ? place.rating + '/10' : 'No rating'}) - ${place.category}`
+).join(' | ')}
+Shopping: ${destPlacesData.categories.shopping.slice(0, 2).map((place: any) => 
+  `${place.name} - ${place.address}`
+).join(' | ')}
+Entertainment: ${destPlacesData.categories.entertainment.slice(0, 2).map((place: any) => 
+  `${place.name} - ${place.category}`
+).join(' | ')}` : 'Places data unavailable'}
+
+🎯 UNIQUE ACTIVITIES DISCOVERED (Web Search Results - HIGH PRIORITY):
+${destUniqueActivities.map(act => 
+  `- ${act.name}: ${act.description}
+    Category: ${act.category || 'general'} | Duration: ${act.duration || '2-3 hours'} | Cost: ${act.cost || 'Varies'}
+    Booking Required: ${act.bookingRequired ? `Yes (${act.advanceBooking || '1 week'} in advance)` : 'No'}
+    Best For: ${Array.isArray(act.bestFor) ? act.bestFor.join(', ') : (act.bestFor || travelStyle + ' travelers')}
+    Tips: ${act.tips || 'Book in advance for best experience'}`
+).join('\n\n')}
+
 CURRENT ACCOMMODATION OPTIONS (Live Data):
 ${destAccommodations.map(acc => 
-  `- ${acc.name}: ${acc.priceRange}, Rating: ${acc.rating}/5 (${acc.reviews} reviews), Location: ${acc.location}, Amenities: ${acc.amenities.join(', ')}`
+  `- ${acc.name}: ${acc.priceRange}, Rating: ${acc.rating}/5 (${acc.reviews} reviews), Location: ${acc.location}, Amenities: ${Array.isArray(acc.amenities) ? acc.amenities.join(', ') : 'Standard amenities'}`
 ).join('\n')}
 
-CURRENT RESTAURANT OPTIONS (Live Data):
-${destRestaurants.map(rest => 
-  `- ${rest.name}: ${rest.cuisine} cuisine, ${rest.priceRange}, Rating: ${rest.rating}/5 (${rest.reviews} reviews), Specialties: ${rest.specialties.join(', ')}, Reservations: ${rest.reservationRequired ? 'Required' : 'Not Required'}`
-).join('\n')}
-
-CURRENT ACTIVITIES & ATTRACTIONS (Live Data):
+STANDARD ACTIVITIES & ATTRACTIONS (Live Data):
 ${destActivities.map(act => 
   `- ${act.name} (${act.type}): ${act.price}, Duration: ${act.duration}, Rating: ${act.rating}/5 (${act.reviews} reviews), Booking: ${act.bookingRequired ? 'Required' : 'Not Required'}`
 ).join('\n')}
 
 LOCAL INSIGHTS & CURRENT CONDITIONS:
 Weather Tips: ${destLocalData?.weatherTips || 'Check current weather conditions'}
-Current Events: ${destLocalData?.currentEvents.map(event => `${event.name} (${event.date}): ${event.description} - ${event.cost}`).join(', ') || 'No major events found'}
-Local Tips: ${destLocalData?.localInsights.join(', ') || 'General travel tips apply'}
-Transport Updates: ${destLocalData?.transportUpdates.join(', ') || 'Standard transport options available'}
+Current Events: ${Array.isArray(destLocalData?.currentEvents) ? destLocalData.currentEvents.map(event => `${event.name} (${event.date}): ${event.description} - ${event.cost}`).join(', ') : 'No major events found'}
+Local Tips: ${Array.isArray(destLocalData?.localInsights) ? destLocalData.localInsights.join(', ') : 'General travel tips apply'}
+Transport Updates: ${Array.isArray(destLocalData?.transportUpdates) ? destLocalData.transportUpdates.join(', ') : 'Standard transport options available'}
       `.trim();
     }).join('\n\n');
 
-    const enhanceItineraryWithScrapedData = (generatedItinerary: any): StructuredItinerary => {
-      if (!generatedItinerary || typeof generatedItinerary !== 'object') {
-        return generatedItinerary;
+    const enhanceItineraryWithScrapedData = (itineraryData: any) => {
+      if (!itineraryData || typeof itineraryData !== 'object') {
+        return itineraryData;
       }
 
-      if (generatedItinerary.accommodation?.recommendations) {
-        generatedItinerary.accommodation.recommendations = generatedItinerary.accommodation.recommendations.map((rec: any) => {
+      if (itineraryData.accommodation?.recommendations) {
+        itineraryData.accommodation.recommendations = itineraryData.accommodation.recommendations.map((rec: any) => {
           const scrapedAccommodations = scrapedData.accommodations.get(rec.destination) || [];
           
           if (scrapedAccommodations.length > 0) {
@@ -494,38 +663,8 @@ Transport Updates: ${destLocalData?.transportUpdates.join(', ') || 'Standard tra
         });
       }
 
-      if (generatedItinerary.restaurants?.recommendations) {
-        generatedItinerary.restaurants.recommendations = destinations.map((dest: Destination) => {
-          const scrapedRestaurants = scrapedData.restaurants.get(dest.name) || [];
-          const existing = generatedItinerary.restaurants.recommendations.find((r: any) => r.destination === dest.name);
-          
-          if (scrapedRestaurants.length > 0) {
-            return {
-              destination: dest.name,
-              realTimeOptions: scrapedRestaurants.map(rest => ({
-                name: rest.name,
-                cuisine: rest.cuisine,
-                priceRange: rest.priceRange,
-                specialties: rest.specialties,
-                reservationRequired: rest.reservationRequired,
-                reservationInfo: rest.reservationRequired ? 
-                  (wantsRestaurantReservations ? 'Book 1-2 weeks in advance via phone or online' : 'Reservations recommended') : 
-                  'Walk-ins welcome',
-                dressCode: rest.priceRange === "$$$$" ? "Smart elegant" : rest.priceRange === "$$$" ? "Smart casual" : "Casual",
-                dietaryOptions: `Check with restaurant for ${dietaryRestrictions} options`,
-                rating: `${rest.rating}/5 (${rest.reviews} reviews)`,
-                scrapedData: true
-              })),
-              ...existing
-            };
-          }
-          
-          return existing;
-        }).filter(Boolean);
-      }
-
-      if (generatedItinerary.destinations) {
-        generatedItinerary.destinations = generatedItinerary.destinations.map((dest: any) => {
+      if (itineraryData.destinations) {
+        itineraryData.destinations = itineraryData.destinations.map((dest: any) => {
           const scrapedActivities = scrapedData.activities.get(dest.name) || [];
           
           if (scrapedActivities.length > 0) {
@@ -547,8 +686,8 @@ Transport Updates: ${destLocalData?.transportUpdates.join(', ') || 'Standard tra
         });
       }
 
-      if (generatedItinerary.itinerary?.days) {
-        generatedItinerary.itinerary.days = generatedItinerary.itinerary.days.map((day: any) => {
+      if (itineraryData.itinerary?.days) {
+        itineraryData.itinerary.days = itineraryData.itinerary.days.map((day: any) => {
           const destLocalData = scrapedData.localInsights.get(day.destination);
           const destActivities = scrapedData.activities.get(day.destination) || [];
           
@@ -599,19 +738,65 @@ Transport Updates: ${destLocalData?.transportUpdates.join(', ') || 'Standard tra
         });
       }
 
-      generatedItinerary.realTimeInsights = destinations.map((dest: Destination) => {
+      if (itineraryData.destinations) {
+        itineraryData.destinations = itineraryData.destinations.map((dest: any) => {
+          const weatherData = scrapedData.weatherData.get(dest.name);
+          if (weatherData) {
+            dest.currentWeather = {
+              temperature: weatherData.current.temperature,
+              description: weatherData.current.description,
+              humidity: weatherData.current.humidity,
+              windSpeed: weatherData.current.windSpeed
+            };
+            dest.forecast = weatherData.forecast;
+            dest.weatherPackingTips = weatherData.packingRecommendations;
+            dest.weatherTravelTips = weatherData.travelTips;
+          }
+          return dest;
+        });
+      }
+
+      if (itineraryData.destinations) {
+        itineraryData.destinations = itineraryData.destinations.map((dest: any) => {
+          const placesData = scrapedData.placesData.get(dest.name);
+          if (placesData?.places) {
+            dest.verifiedPlaces = {
+              attractions: placesData.categories.attractions.slice(0, 10),
+              dining: placesData.categories.dining.slice(0, 8),
+              shopping: placesData.categories.shopping.slice(0, 5),
+              entertainment: placesData.categories.entertainment.slice(0, 5),
+              outdoor: placesData.categories.outdoor.slice(0, 5)
+            };
+          }
+          return dest;
+        });
+      }
+
+      itineraryData.realTimeInsights = destinations.map((dest: Destination) => {
         const localData = scrapedData.localInsights.get(dest.name);
+        const weatherData = scrapedData.weatherData.get(dest.name);
+        const placesData = scrapedData.placesData.get(dest.name);
+        
         return {
           destination: dest.name,
           weatherTips: localData?.weatherTips || '',
           currentEvents: localData?.currentEvents || [],
           localTips: localData?.localInsights || [],
           transportUpdates: localData?.transportUpdates || [],
+          currentWeather: weatherData ? {
+            temperature: weatherData.current.temperature,
+            description: weatherData.current.description,
+            forecast: weatherData.forecast.slice(0, 3)
+          } : null,
+          topPlaces: placesData ? {
+            attractions: placesData.categories.attractions.slice(0, 3),
+            dining: placesData.categories.dining.slice(0, 3)
+          } : null,
           scrapedAt: new Date().toISOString()
         };
       });
 
-      return generatedItinerary;
+      return itineraryData;
     };
 
     
@@ -634,10 +819,60 @@ Transport Updates: ${destLocalData?.transportUpdates.join(', ') || 'Standard tra
     }
 
     
-    const isMultiDestination = destinations.length > 1;
-    const destinationList = destinations.map((d: Destination) => d.name).join(', ');
-    
-    
+    const getTravelStyleActivities = (style: string) => {
+      switch (style) {
+        case 'relaxed':
+          return { 
+            activitiesPerDay: 2, 
+            pace: 'leisurely', 
+            focus: 'relaxation and gentle sightseeing',
+            preferredTypes: ['wellness', 'nature', 'culture', 'dining'] 
+          };
+        case 'balanced':
+          return { 
+            activitiesPerDay: 3, 
+            pace: 'moderate', 
+            focus: 'mix of sightseeing and relaxation',
+            preferredTypes: ['sightseeing', 'culture', 'dining', 'nature'] 
+          };
+        case 'active':
+          return { 
+            activitiesPerDay: 4, 
+            pace: 'energetic', 
+            focus: 'packed with diverse experiences',
+            preferredTypes: ['sightseeing', 'adventure', 'culture', 'nature', 'shopping'] 
+          };
+        case 'adventurous':
+          return { 
+            activitiesPerDay: 5, 
+            pace: 'high-energy', 
+            focus: 'thrilling and unique experiences',
+            preferredTypes: ['adventure', 'nature', 'sports', 'unique', 'exploration'] 
+          };
+        case 'cultural':
+          return { 
+            activitiesPerDay: 4, 
+            pace: 'immersive', 
+            focus: 'deep cultural exploration',
+            preferredTypes: ['culture', 'history', 'museums', 'heritage', 'art'] 
+          };
+        case 'foodie':
+          return { 
+            activitiesPerDay: 4, 
+            pace: 'culinary-focused', 
+            focus: 'gastronomic adventures',
+            preferredTypes: ['dining', 'markets', 'cooking', 'culture', 'local'] 
+          };
+        default:
+          return { 
+            activitiesPerDay: 3, 
+            pace: 'moderate', 
+            focus: 'balanced exploration',
+            preferredTypes: ['sightseeing', 'culture', 'dining'] 
+          };
+      }
+    };
+
     const getBudgetGuidance = (budgetType: string, maxBudget?: number) => {
       switch (budgetType) {
         case 'cheapest':
@@ -671,7 +906,7 @@ Transport Updates: ${destLocalData?.transportUpdates.join(', ') || 'Standard tra
           return {
             dailyBudget: '$500+',
             accommodationType: '5-star hotels, luxury resorts, premium suites',
-            foodType: 'Fine dining, Michelin-starred restaurants, exclusive experiences',
+            foodType: 'Fine dining, Michelin-starred restaurants, exclusive culinary experiences',
             transportType: 'Business class flights, private transfers, premium transport',
             activityType: 'VIP experiences, private tours, exclusive access',
             tips: 'Book premium experiences well in advance, consider concierge services'
@@ -714,11 +949,56 @@ Transport Updates: ${destLocalData?.transportUpdates.join(', ') || 'Standard tra
 INTERACTIVE PREFERENCES:
 - Hotel Recommendations: ${wantsHotelRecommendations ? 'YES - Include 3-5 hotel options per destination with detailed comparisons, pros/cons, and booking tips' : 'NO - Minimal accommodation info'}
 - Flight Booking Help: ${wantsFlightBooking ? 'YES - Include multiple flight options, airlines, booking strategies, and seasonal pricing' : 'NO - Basic transport info only'}
-- Local Experiences: ${wantsLocalExperiences ? 'YES - Include unique local activities, hidden gems, cultural experiences, and authentic interactions' : 'NO - Standard tourist activities'}
-- Restaurant Reservations: ${wantsRestaurantReservations ? 'YES - Include restaurant recommendations with reservation details, contact info, and booking timelines' : 'NO - General dining suggestions'}`;
+- Local Experiences: ${wantsLocalExperiences ? 'YES - Include unique local activities, hidden gems, cultural experiences, and authentic interactions' : 'NO - Standard tourist activities'}`;
 
     
-    const prompt = `Create a detailed ${tripDuration}-day travel itinerary in JSON format that STRICTLY RESPECTS the budget constraints and INCORPORATES the real-time scraped data provided below.
+    const styleGuide = getTravelStyleActivities(travelStyle);
+    
+    
+    const accommodationGuidance = accommodation === 'best' ? 
+      'Find the optimal accommodation type based on destination, budget, and travel style' :
+      accommodation === 'unique' ? 'Prioritize boutique hotels, B&Bs, and distinctive local properties' :
+      accommodation === 'budget' ? 'Focus on hostels, guesthouses, and budget-friendly options' :
+      'Standard hotel accommodations';
+    
+    const transportGuidance = transportPreference === 'best' ?
+      'Recommend optimal transport based on routes, time, cost, and experience' :
+      transportPreference === 'fast' ? 'Prioritize speed and convenience, prefer flights and express services' :
+      transportPreference === 'scenic' ? 'Choose routes with beautiful views, prefer trains and coastal drives' :
+      transportPreference === 'budget' ? 'Select most affordable options like buses and budget airlines' :
+      transportPreference === 'flexible' ? 'Include car rentals and self-drive options for maximum freedom' :
+      'Standard transport options';
+    
+    const interestAnalysis = interests.length > 0 ? 
+      `CRITICAL: User's specific interests are: ${interests.join(', ')}. Each day must include activities directly related to these interests. If they mentioned "conferences" include business districts and conference venues. If they mentioned "photography" include scenic viewpoints and golden hour activities. Tailor ALL recommendations to these exact interests.` :
+      'Focus on general destination highlights';
+    
+    const prompt = `🚨 CRITICAL REQUIREMENTS: 
+1. Generate exactly ${tripDuration} days in the itinerary.days array. DO NOT generate fewer days. Each day from 1 to ${tripDuration} must be included with full details.
+2. Generate ${styleGuide.activitiesPerDay} activities per day minimum based on ${travelStyle} travel style. DO NOT generate only 1 activity per day.
+3. Trip highlights MUST reference actual activities from the daily itinerary, not generic destinations.
+
+🚨 ABSOLUTE CRITICAL RULE: You MUST generate ${styleGuide.activitiesPerDay} activities per day for ${travelStyle} travel style. The user selected "${travelStyle}" which requires ${styleGuide.activitiesPerDay} activities per day. DO NOT generate only 1 activity per day. This is a hard requirement.
+
+MISSION: Create a transformative ${tripDuration}-day travel masterpiece that transcends typical itinerary planning. This is not just a schedule - it's a complete cultural immersion blueprint that STRICTLY RESPECTS budget constraints, INCORPORATES real-time intelligence, and creates authentic connections with local culture.
+
+CORE PRINCIPLES:
+🎯 AUTHENTICITY FIRST: Prioritize genuine local experiences over tourist attractions
+💰 BUDGET SACRED: Every recommendation must align with specified budget constraints
+⏰ LOGISTICS MASTERY: Account for realistic timing, crowds, seasonal factors, booking windows
+🏛️ CULTURAL DEPTH: Provide historical context, local customs, and meaningful interactions
+🔄 PROACTIVE PLANNING: Anticipate problems, provide alternatives, consider weather/seasonality
+📍 INSIDER ACCESS: Include hidden gems, local secrets, and authentic neighborhood experiences
+
+🎯 PROACTIVE PLANNING APPROACH:
+- Create detailed hour-by-hour schedules for each day
+- Include backup plans for weather contingencies
+- Provide specific timing recommendations (e.g., "Visit at 9 AM to avoid crowds")
+- Include transition times between activities
+- Suggest optimal photo spots and timing
+- Recommend local customs and etiquette for each activity
+- Include seasonal considerations and local events
+- Provide detailed logistics for each recommendation
 
 TRIP DETAILS:
 - Departure: ${departureLocation || 'Not specified'}
@@ -726,12 +1006,22 @@ TRIP DETAILS:
 - Dates: ${startDate} to ${endDate}
 - Travelers: ${travelers}
 - Budget: ${budget}${maxBudget ? ` (Max: $${maxBudget})` : ''}
-- Style: ${travelStyle}
-- Interests: ${interests.join(', ')}
-- Accommodation: ${accommodation}
-- Transport: ${transportPreference}
-- Diet: ${dietaryRestrictions}
-${additionalNotes ? `- Notes: ${additionalNotes}` : ''}
+- Style: ${travelStyle} (${styleGuide.activitiesPerDay} activities/day, ${styleGuide.pace} pace)
+
+🎭 TRAVELER PERSONALITY PROFILE (SACRED REQUIREMENTS):
+${interestAnalysis}
+
+LIFESTYLE PREFERENCES (MUST INTEGRATE INTO EVERY RECOMMENDATION):
+• Accommodation Philosophy: ${accommodationGuidance}
+• Transport Strategy: ${transportGuidance}
+• Dietary Identity: ${dietaryRestrictions !== 'none' ? `CRITICAL - ${dietaryRestrictions} dietary requirements must be considered for EVERY meal recommendation` : 'No dietary restrictions'}
+• Accessibility Considerations: Standard accessibility requirements (wheelchair accessible venues when possible)
+${additionalNotes ? `• Personal Notes & Special Requests: ${additionalNotes}` : ''}
+
+TRAVELER CHEMISTRY ANALYSIS:
+- Group Size: ${travelers} ${travelers === 1 ? 'solo traveler (independence, flexibility, social opportunities)' : travelers === 2 ? 'couple (intimate experiences, romantic settings, shared discoveries)' : 'group (coordination, shared experiences, varied interests)'}
+- Travel Dynamics: Consider group chemistry, decision-making preferences, and energy management
+- Experience Sharing: Plan moments for meaningful connections and photo opportunities
 
 BUDGET CONSTRAINTS (MUST BE RESPECTED):
 - Daily Budget: ${budgetGuidance.dailyBudget}
@@ -743,42 +1033,102 @@ BUDGET CONSTRAINTS (MUST BE RESPECTED):
 
 ${interactivePreferences}
 
-🔥 REAL-TIME SCRAPED DATA (PRIORITY - USE THIS DATA):
+🔥 REAL-TIME SCRAPED DATA AND DISCOVERED ACTIVITIES (PRIORITY - USE THIS DATA):
 ${enhancedContext}
+
+CRITICAL INSTRUCTIONS FOR DETAILED DAILY PLANNING:
+1. **HOURLY SCHEDULES**: Create detailed hour-by-hour itineraries with specific timing
+2. **TRANSITION LOGISTICS**: Include travel time between activities, transport methods, and costs
+3. **CROWD AVOIDANCE**: Recommend optimal timing to avoid crowds at popular attractions
+4. **WEATHER CONTINGENCIES**: Provide indoor alternatives for outdoor activities
+5. **LOCAL INSIGHTS**: Include cultural context, local customs, and etiquette tips
+6. **PHOTO OPPORTUNITIES**: Suggest best spots and timing for photography
+7. **ENERGY MANAGEMENT**: Balance high-energy and relaxing activities throughout each day
+8. **MEAL TIMING**: Strategic meal placement to optimize energy and budget
+9. **BOOKING WINDOWS**: Specific timeframes for making reservations
+10. **SEASONAL CONSIDERATIONS**: Adapt recommendations based on travel dates
+
+CRITICAL WEATHER & PLACES INTEGRATION:
+1. **OVERVIEW**: Include current weather conditions and forecast in the trip overview
+2. **DESTINATIONS**: For each destination, mention current weather and top-rated places from Foursquare data
+3. **DAILY ACTIVITIES**: Consider weather conditions when scheduling outdoor vs indoor activities
+4. **PACKING**: Use real weather data for packing recommendations
+5. **PLACES**: Prioritize verified Foursquare places with real ratings over generic suggestions
 
 IMPORTANT: Use the real-time scraped data above to:
 1. Include actual hotel names, prices, and ratings from the scraped accommodation data
-2. Incorporate real restaurant names, cuisines, and pricing from the scraped restaurant data  
-3. Use actual activity names, costs, and ratings from the scraped activity data
-4. Include current events happening during the travel dates
-5. Incorporate current weather tips and local insights
+2. Use actual activity names, costs, and ratings from the scraped activity data
+3. Include current events happening during the travel dates
+4. **WEATHER**: Incorporate real temperature, conditions, and 5-day forecast into planning
+5. **PLACES**: Use verified Foursquare places with real ratings and addresses
 6. Use real pricing information to ensure budget accuracy
 7. Mention specific amenities, ratings, and review counts from scraped data
 8. Include any transport updates or local tips from scraped data
 
-The scraped data should take PRIORITY over generic recommendations. If real pricing is available, use those exact prices. If real hotels/restaurants are found, prioritize them in recommendations.
+ENHANCED PROACTIVE REQUIREMENTS:
+1. **COMPLETE DAILY SCHEDULES**: Include ALL ${tripDuration} days with detailed hour-by-hour plans
+2. **MULTIPLE ACTIVITIES PER DAY**: CRITICAL - Include ${styleGuide.activitiesPerDay} activities per day minimum based on ${travelStyle} travel style. DO NOT generate only 1 activity per day.
+3. **REALISTIC LOGISTICS**: Account for travel time, queues, meal breaks, and rest periods
+4. **MULTIPLE OPTIONS**: Provide 2-3 alternatives for each major activity/restaurant
+5. **ADVANCE PLANNING**: Include specific booking deadlines and reservation requirements
+6. **LOCAL EXPERTISE**: Add insider tips, hidden gems, and local recommendations
+7. **CONTINGENCY PLANNING**: Weather backup plans and alternative activities
+8. **CULTURAL IMMERSION**: Include authentic local experiences and cultural learning opportunities
+9. **BUDGET OPTIMIZATION**: Detailed cost breakdowns and money-saving strategies
+10. **PRACTICAL DETAILS**: Include addresses, phone numbers, opening hours, and booking links
+11. **PERSONALIZATION**: Tailor every recommendation to the user's specific interests: ${interests.join(', ')}
+12. **SEASONAL ADAPTATION**: Adjust recommendations based on travel season and local events
+13. **ENERGY FLOW**: Design daily flow to maximize enjoyment and minimize fatigue
 
-ENHANCED REQUIREMENTS:
-1. Include ALL ${tripDuration} days in itinerary.days array
-2. Use real place names and realistic costs that FIT THE BUDGET
-3. Match activities to interests: ${interests.join(', ')}
-4. Include detailed transport between destinations with multiple options
-5. Provide specific recommendations based on interactive preferences
-6. ${wantsHotelRecommendations ? 'Include 3-5 hotel options per destination with detailed comparisons, pros/cons, pricing, and booking strategies' : 'Basic accommodation info'}
-7. ${wantsFlightBooking ? 'Include multiple flight options with different airlines, classes, and booking strategies from ' + (departureLocation || 'major cities') : 'Basic flight info'}
-8. ${wantsLocalExperiences ? 'Include unique local experiences, hidden gems, cultural activities, and authentic interactions' : 'Standard tourist activities'}
-9. ${wantsRestaurantReservations ? 'Include restaurant recommendations with reservation requirements, contact info, and booking timelines' : 'General dining suggestions'}
-10. RESPECT BUDGET: All recommendations must fit within ${budgetGuidance.dailyBudget} daily budget
-11. Provide multiple options for accommodation, transport, and activities at different price points
-12. Include money-saving tips and splurge recommendations within budget
+GEOGRAPHIC INTELLIGENCE REQUIREMENTS:
+1. **ACTIVITY CLUSTERING**: Group activities by geographic proximity to minimize travel time
+2. **LOGICAL ROUTING**: Plan activities in geographical order (north to south, clockwise, etc.)
+3. **WALKING DISTANCES**: Include specific walking distances between consecutive activities
+4. **TRANSPORT OPTIMIZATION**: Suggest most efficient transport methods between locations
+5. **NEIGHBORHOOD AWARENESS**: Keep morning activities in one area, afternoon in another
+6. **LANDMARK REFERENCES**: Use specific landmarks as reference points for navigation
+
+TIME-OF-DAY OPTIMIZATION REQUIREMENTS:
+1. **MORNING (6-11 AM)**: Museums, monuments, markets, outdoor activities (cooler, fewer crowds)
+2. **MIDDAY (11 AM-2 PM)**: Indoor activities, shopping, lunch, air-conditioned venues
+3. **AFTERNOON (2-6 PM)**: Parks, walking tours, outdoor exploration, cultural sites
+4. **EVENING (6-9 PM)**: Dining, sunset spots, cultural performances, local nightlife
+5. **NIGHT (9 PM+)**: Entertainment, bars, night markets, shows
+
+SPECIFIC VENUE REQUIREMENTS:
+- Use EXACT venue names, not generic descriptions
+- Include specific streets/addresses when possible
+- Reference actual landmarks (e.g., "near the Arc de Triomphe" not "near a monument")
+- Mention real restaurant names, not "local restaurant"
+- Include specific transportation stations/stops
 
 Return ONLY valid JSON in this EXACT structure:
 {
-  "overview": "Comprehensive trip overview highlighting key experiences and luxury elements",
+  "overview": "Comprehensive trip overview highlighting key experiences and unique elements",
+  "tripHighlights": [
+    {
+      "name": "MUST BE AN ACTUAL ACTIVITY FROM THE DAILY ITINERARY - Main Activity Name",
+      "description": "What makes this highlight special and unmissable - MUST reference an activity that appears in the daily plan"
+    },
+    {
+      "name": "MUST BE AN ACTUAL ACTIVITY FROM THE DAILY ITINERARY - Cultural Experience Name", 
+      "description": "Unique cultural immersion opportunity - MUST reference an activity that appears in the daily plan"
+    },
+    {
+      "name": "MUST BE AN ACTUAL ACTIVITY FROM THE DAILY ITINERARY - Hidden Gem Name",
+      "description": "Off-the-beaten-path discovery - MUST reference an activity that appears in the daily plan"
+    }
+  ],
+  "culturalTips": {
+    "etiquette": ["Specific behavior expectation", "Social norm to respect"],
+    "customs": ["Local tradition to be aware of", "Cultural practice to observe"],
+    "language": ["Essential phrase with pronunciation", "Useful expression for tourists"],
+    "safety": ["Regional safety consideration", "Local precaution to take"]
+  },
   "destinations": [
     {
       "name": "Destination Name",
-      "description": "What makes this place special for luxury travelers",
+      "description": "What makes this place special for travelers",
       "duration": ${destinations[0]?.duration || 3},
       "bestTimeToVisit": "Best season with weather details",
       "localCurrency": "Currency with exchange rate tips",
@@ -786,13 +1136,17 @@ Return ONLY valid JSON in this EXACT structure:
       "timeZone": "Time zone information",
       "activities": [
         {
-          "name": "Activity Name",
-          "description": "Detailed activity description",
+          "name": "SPECIFIC VENUE NAME (not generic description)",
+          "description": "Detailed activity description with cultural context",
           "duration": "2 hours",
           "cost": "$25",
           "category": "adventure",
+          "location": "Specific address or landmark reference",
+          "walkingDistanceFromPrevious": "5 minutes walk south",
+          "transportTime": "10 minutes by metro",
+          "timeOfDay": "morning",
           "bookingRequired": true,
-          "tips": "Insider tips for this activity"
+          "tips": "Insider tips for this specific venue"
         }
       ]
     }
@@ -883,9 +1237,9 @@ Return ONLY valid JSON in this EXACT structure:
             "bestFor": "Budget travelers"
           },
           {
-            "name": "Mid-Range Option Hotel",
-            "type": "Mid-range type",
-            "priceRange": "Mid-range price/night",
+            "name": "Another hotel based on the budget",
+            "type": "Another hotel type",
+            "priceRange": "Another hotel price/night",
             "location": "Prime location",
             "highlights": ["Premium features"],
             "rating": "Higher rating",
@@ -893,35 +1247,10 @@ Return ONLY valid JSON in this EXACT structure:
             "cons": ["Minor disadvantages"],
             "bestFor": "Comfort seekers"
           },
-          {
-            "name": "Premium Option Hotel",
-            "type": "Luxury type",
-            "priceRange": "Premium price/night",
-            "location": "Best location",
-            "highlights": ["Luxury features"],
-            "rating": "Top rating",
-            "pros": ["Luxury advantages"],
-            "cons": ["Higher cost"],
-            "bestFor": "Luxury travelers"
-          }
+          // Add more hotel options based on the overall trip
         ],
         "bookingTips": "${wantsHotelRecommendations ? 'Detailed booking advice, best rates, comparison sites, and insider tips for each option' : 'Basic booking info'}",
         "generalTips": "How to choose between options based on budget and preferences"
-      }
-    ]
-  },
-  "restaurants": {
-    "recommendations": [
-      {
-        "destination": "City",
-        "name": "Restaurant Name",
-        "cuisine": "Local/International",
-        "priceRange": "$$$$",
-        "specialties": ["Dish 1", "Dish 2"],
-        "reservationRequired": ${wantsRestaurantReservations},
-        "reservationInfo": "${wantsRestaurantReservations ? 'Detailed reservation process, contact info, and best times' : 'Basic info'}",
-        "dressCode": "Smart casual",
-        "dietaryOptions": "Available options for ${dietaryRestrictions}"
       }
     ]
   },
@@ -940,38 +1269,134 @@ Return ONLY valid JSON in this EXACT structure:
   },
   "itinerary": {
     "days": [
+      // CRITICAL: Generate exactly ${tripDuration} day objects - one for each day from day 1 to day ${tripDuration}
       {
         "day": 1,
         "date": "${startDate}",
-        "destination": "City",
-        "title": "Arrival and First Impressions",
-        "theme": "Getting oriented and luxury welcome",
+        "destination": "Primary destination for day 1",
+        "title": "Day 1 title (e.g., Arrival and First Impressions)", 
+        "theme": "Theme for day 1",
         "activities": [
           {
             "time": "09:00 AM",
-            "name": "Activity",
-            "description": "What you'll do with luxury touches",
-            "location": "Specific address or landmark",
+            "name": "SPECIFIC VENUE NAME - Morning Activity",
+            "description": "Detailed activity description with cultural context and what to expect",
+            "location": "Specific address or landmark with GPS coordinates",
             "duration": "2 hours",
             "cost": "$25",
-            "tips": "Insider tips and recommendations",
+            "tips": "Insider tips, best photo spots, crowd avoidance, local etiquette",
             "bookingRequired": false,
-            "category": "arrival"
-          }
+            "category": "arrival",
+            "alternatives": [
+              {
+                "name": "Alternative Activity",
+                "reason": "If weather is bad or activity is full",
+                "cost": "$20",
+                "location": "Alternative location"
+              }
+            ],
+            "practicalInfo": {
+              "address": "Full street address",
+              "phone": "Contact number",
+              "website": "Official website",
+              "openingHours": "Daily schedule",
+              "bestTimeToVisit": "Optimal timing to avoid crowds",
+              "accessibilityInfo": "Wheelchair access, stairs, etc.",
+              "paymentMethods": "Cash, card, mobile payments accepted"
+            },
+            "culturalContext": "Historical significance and cultural importance",
+            "photoSpots": ["Best viewpoint 1", "Instagram-worthy spot 2"],
+            "localEtiquette": "Dress code, behavior expectations, tipping customs",
+            "weatherConsiderations": "Indoor/outdoor, seasonal variations"
+          },
+          // REPEAT THE ABOVE STRUCTURE FOR ACTIVITIES/PLAN THROUGHOUT THE DAY
+          // 🚨 CRITICAL: MUST include ${styleGuide.activitiesPerDay} activities per day based on ${travelStyle} travel style
+          // Current style: ${travelStyle} = ${styleGuide.activitiesPerDay} activities per day MINIMUM
+          // DO NOT STOP AT 1 ACTIVITY - GENERATE THE FULL NUMBER OF ACTIVITIES
+          // Example: If activitiesPerDay = 4, generate 4 complete activity objects with different times
+          // Times should be spread throughout the day: morning, late morning, afternoon, late afternoon/evening
         ],
         "meals": [
           {
             "time": "12:30 PM",
             "type": "Lunch",
-            "restaurant": "Restaurant name",
+            "suggestion": "Local dining spot name",
             "cuisine": "Local",
             "cost": "$45",
-            "reservationNeeded": ${wantsRestaurantReservations}
+            "notes": "Dining recommendations and tips",
+            "alternatives": [
+              {
+                "name": "Budget option",
+                "cost": "$25",
+                "reason": "If looking to save money"
+              },
+              {
+                "name": "Premium option", 
+                "cost": "$65",
+                "reason": "For special occasion"
+              }
+            ],
+            "practicalInfo": {
+              "address": "Full address",
+              "phone": "Reservation number",
+              "reservationRequired": true,
+              "averageWaitTime": "15-30 minutes",
+              "paymentMethods": "Cash, card accepted",
+              "dietaryOptions": "Vegetarian, vegan, gluten-free available"
+            },
+            "menuHighlights": ["Must-try dish 1", "Local specialty 2"],
+            "culturalDining": "Local dining customs and etiquette"
           }
         ],
-        "transport": "How to get around this day",
-        "accommodation": "Where you're staying with check-in details"
-      }
+        "transport": {
+          "overview": "How to get around this day",
+          "details": [
+            {
+              "from": "Starting location",
+              "to": "Destination",
+              "method": "Walking/Metro/Taxi",
+              "duration": "15 minutes",
+              "cost": "$3",
+              "instructions": "Detailed directions and tips"
+            }
+          ],
+          "dailyTransportBudget": "$15",
+          "transportTips": "Local transport apps, payment methods, safety tips"
+        },
+        "accommodation": {
+          "name": "Hotel/Accommodation name",
+          "checkInDetails": "Check-in process and timing",
+          "amenities": ["WiFi", "Breakfast", "Gym"],
+          "tips": "Hotel-specific tips and recommendations"
+        },
+        "dailyBudgetBreakdown": {
+          "activities": "$XX",
+          "meals": "$XX", 
+          "transport": "$XX",
+          "miscellaneous": "$XX",
+          "total": "$XX"
+        },
+        "weatherInfo": {
+          "forecast": "Expected weather conditions",
+          "temperature": "High/Low temperatures",
+          "recommendations": "Weather-appropriate clothing and gear"
+        },
+        "energyLevel": "High/Medium/Low - indicating intensity of the day",
+        "highlights": ["Top 3 experiences of the day"],
+        "eveningOptions": [
+          {
+            "name": "Evening activity option",
+            "type": "Entertainment/Dining/Relaxation",
+            "cost": "$30",
+            "description": "What to do in the evening"
+          }
+        ]
+      },
+      // REPEAT THE ABOVE STRUCTURE FOR ALL ${tripDuration} DAYS
+      // Day 2: { "day": 2, "date": "Next day", ... },  
+      // Day 3: { "day": 3, "date": "Third day", ... },
+      // Continue until day ${tripDuration}
+      // DO NOT STOP AT DAY 1 - GENERATE ALL ${tripDuration} DAYS WITH FULL DETAILS
     ]
   },
   "budget": {
@@ -1039,337 +1464,151 @@ Return ONLY valid JSON in this EXACT structure:
       messages: [
         {
           role: "system",
-          content: "You are an expert travel planner with 20+ years of experience creating personalized itineraries for all budget levels. You excel at finding the best value options while respecting strict budget constraints. You provide multiple options for accommodations, transport, and activities at different price points. Your responses must be valid JSON that can be parsed directly. CRITICAL: Ensure your JSON response is complete and properly closed with all brackets and braces. ALWAYS respect the specified budget constraints and provide realistic pricing. Focus on authenticity, value, and creating memorable experiences within budget."
+          content: `You are a world-renowned master travel planner and cultural immersion specialist with 25+ years of expertise creating transformative, meticulously detailed travel experiences. Your specialties include: proactive hour-by-hour scheduling, insider cultural insights, budget optimization, authentic local experiences, seasonal timing strategies, advance booking coordination, and practical logistics mastery. 
+
+CRITICAL: You MUST generate exactly ${tripDuration} days in the itinerary.days array. This is non-negotiable. Each day must have detailed activities, meals, and transport information. Do not abbreviate or skip days due to length constraints.
+
+You understand that exceptional travel planning anticipates needs, provides alternatives, respects budgets religiously, and creates authentic connections with local culture. Your itineraries are comprehensive travel guides that serve as complete roadmaps for unforgettable journeys. You excel at balancing must-see highlights with hidden gems, managing realistic timing with transport logistics, and matching experiences perfectly to traveler personalities and interests. Every recommendation includes practical details, cultural context, insider tips, and authentic local experiences. You respond with ONLY valid JSON that can be parsed directly - ensure complete, properly closed JSON structure with all brackets and braces.`
         },
         {
           role: "user",
           content: prompt
         }
       ],
-      model: "deepseek-r1-distill-llama-70b",
-      temperature: 0.3,
-      max_tokens: 12000,
-      top_p: 0.8,
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.5,
+      max_tokens: 15000,
+      top_p: 0.8, 
     });
 
     const itineraryResponse = completion.choices[0]?.message?.content || "Failed to generate itinerary";
     
     let itineraryData;
-    try {
-      let jsonString = itineraryResponse.trim();
-      
-      
-      const jsonMatch = jsonString.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      if (jsonMatch) {
-        jsonString = jsonMatch[1].trim();
-      }
-      
-      const firstBrace = jsonString.indexOf('{');
-      const lastBrace = jsonString.lastIndexOf('}');
-      
-      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-        jsonString = jsonString.substring(firstBrace, lastBrace + 1);
-      }
-      
-      
-      jsonString = jsonString
-        .replace(/,\s*}/g, '}') 
-        .replace(/,\s*]/g, ']') 
-        .replace(/\n/g, ' ') 
-        .replace(/\s+/g, ' '); 
-      
-      itineraryData = JSON.parse(jsonString);
-      
-      
-      if (!itineraryData.overview || !itineraryData.destinations || !itineraryData.itinerary) {
-        throw new Error("Invalid itinerary structure");
-      }
-      
-      
-      if (!itineraryData.itinerary.days || itineraryData.itinerary.days.length !== tripDuration) {
-        console.warn(`Expected ${tripDuration} days, got ${itineraryData.itinerary.days?.length || 0}`);
-      }
-      
-    } catch (error) {
-      console.error("Failed to parse itinerary JSON:", error);
-      console.error("Raw response length:", itineraryResponse.length);
-      console.error("Raw response preview:", itineraryResponse.substring(0, 500) + "...");
-      
-      
-      const fallbackItinerary: Partial<StructuredItinerary> = {
-        overview: `Experience an extraordinary ${tripDuration}-day luxury journey through ${destinationList}. This meticulously crafted itinerary combines ${travelStyle} travel with premium experiences focused on ${interests.join(', ')}, ensuring an unforgettable adventure tailored to your sophisticated preferences.`,
-        destinations: destinations.map((dest: Destination) => ({
-          name: dest.name,
-          description: `A captivating luxury destination offering world-class experiences perfect for discerning ${travelStyle} travelers with interests in ${interests.join(', ')}.`,
-          duration: dest.duration,
-          bestTimeToVisit: "Year-round with seasonal highlights and optimal weather windows",
-          localCurrency: "Local currency with current exchange rates and payment tips",
-          languages: "Local languages with essential phrases for luxury travelers",
-          timeZone: "Local time zone with jet lag management tips",
-          activities: [
-            {
-              name: "Premium Cultural Exploration",
-              description: "Private guided tour of cultural highlights with expert local guide",
-              duration: "3 hours",
-              cost: "$150",
-              category: "culture",
-              bookingRequired: true,
-              tips: "Book private tours for personalized experience"
-            },
-            {
-              name: "Luxury Culinary Experience",
-              description: `Exclusive ${dietaryRestrictions !== 'none' ? dietaryRestrictions + ' ' : ''}dining experience with renowned chef`,
-              duration: "2.5 hours",
-              cost: "$200",
-              category: "food",
-              bookingRequired: true,
-              tips: "Reserve well in advance for chef's table experiences"
-            }
-          ]
-        })),
-        transport: {
-          betweenDestinations: isMultiDestination ? [{
-            from: destinations[0].name,
-            to: destinations[1]?.name || destinations[0].name,
-            options: [{
-              type: transportPreference === 'public' ? 'Premium Train Service' : 'Luxury Transfer Options',
-              duration: "2-4 hours",
-              cost: "$150-400",
-              description: "Premium transport options with comfort and style",
-              bookingInfo: wantsFlightBooking ? "Book 2-4 weeks in advance for best rates and seat selection" : "Standard booking available",
-              pros: ["Comfort", "Scenic route", "Reliable"],
-              cons: ["Weather dependent"]
-            }]
-          }] : [],
-          gettingThere: {
-            flights: [{
-              from: "Major international hub",
-              to: destinations[0].name,
-              airlines: ["Premium carriers", "Luxury airlines"],
-              estimatedCost: budget === 'luxury' ? "$2000-5000" : "$800-2000",
-              duration: "Varies by origin",
-              bookingTips: wantsFlightBooking ? "Book 2-3 months ahead for business class deals. Use airline miles for upgrades. Tuesday departures often cheaper." : "Book in advance for better rates",
-              classOptions: ["Economy", "Premium Economy", "Business", "First"],
-              seasonalPricing: "Peak season: +30-50%, Shoulder: +10-20%, Off-peak: Best rates"
-            }],
-            otherOptions: []
-          },
-          localTransport: destinations.map((dest: Destination) => ({
-            destination: dest.name,
-            options: [{
-              type: transportPreference === 'public' ? 'Premium public transport' : 'Private luxury transport',
-              cost: budget === 'luxury' ? "$50-100/day" : "$20-50/day",
-              description: "Comfortable and efficient local transportation",
-              apps: "Local transport apps and luxury car services"
-            }]
-          }))
-        },
-        accommodation: {
-          recommendations: destinations.map((dest: Destination) => ({
-            destination: dest.name,
-            name: `Luxury ${accommodation} in ${dest.name}`,
-            type: accommodation,
-            priceRange: budget === 'luxury' ? "$500-1000/night" : budget === 'moderate' ? "$200-400/night" : "$100-200/night",
-            location: "Prime location with landmark proximity",
-            highlights: ["Exceptional service", "Premium amenities", "Prime location", "Luxury spa"],
-            suitableFor: `Discerning ${travelStyle} travelers`,
-            bookingTips: wantsHotelRecommendations ? "Book directly with hotel for upgrades. Join loyalty programs. Request higher floors and specific room types. Best rates often 2-3 months in advance." : "Book in advance for better rates",
-            amenities: ["Concierge service", "Spa", "Fine dining", "Premium location"],
-            rating: "5 stars",
-            pros: ["Exceptional service", "Prime location", "Luxury amenities"],
-            cons: ["Premium pricing"]
-          }))
-        },
-        restaurants: {
-          recommendations: destinations.map((dest: Destination) => ({
-            destination: dest.name,
-            name: `Premier Restaurant in ${dest.name}`,
-            cuisine: "Local specialties with international flair",
-            priceRange: budget === 'luxury' ? "$$$$" : "$$$",
-            specialties: ["Signature dish 1", "Local delicacy", "Chef's special"],
-            reservationRequired: wantsRestaurantReservations,
-            reservationInfo: wantsRestaurantReservations ? "Reserve 2-4 weeks ahead. Call directly or use concierge. Mention special occasions for VIP treatment." : "Reservations recommended",
-            dressCode: "Smart elegant",
-            dietaryOptions: `Excellent ${dietaryRestrictions} options available`
-          }))
-        },
-        localExperiences: {
-          unique: destinations.map((dest: Destination) => ({
-            name: `Exclusive ${dest.name} Experience`,
-            description: wantsLocalExperiences ? `Private behind-the-scenes access to ${dest.name}'s hidden gems with cultural expert guide, including exclusive venues not open to general public` : `Standard cultural tour of ${dest.name} highlights`,
-            duration: "Half day",
-            cost: wantsLocalExperiences ? "$300" : "$75",
-            bookingRequired: true,
-            culturalSignificance: "Deep dive into local culture and traditions",
-            tips: "Bring camera and comfortable walking shoes"
-          }))
-        },
-        itinerary: {
-          days: Array.from({ length: tripDuration }, (_, i) => {
-            const dayNum = i + 1;
-            const currentDest = destinations.find((d: Destination) => {
-              const startDay = destinations.slice(0, destinations.indexOf(d)).reduce((sum: number, prev: Destination) => sum + prev.duration, 1);
-              const endDay = startDay + d.duration - 1;
-              return dayNum >= startDay && dayNum <= endDay;
-            }) || destinations[0];
-            
-            const date = new Date(startDate);
-            date.setDate(date.getDate() + i);
-            
-            return {
-              day: dayNum,
-              date: date.toISOString().split('T')[0],
-              destination: currentDest.name,
-              title: dayNum === 1 ? `Luxury Arrival in ${currentDest.name}` : `Exploring ${currentDest.name} in Style`,
-              theme: dayNum === 1 ? "Arrival and luxury welcome" : "Cultural immersion and premium experiences",
-              activities: [
-                {
-                  time: "09:00 AM",
-                  name: dayNum === 1 ? "VIP Airport Transfer & Hotel Check-in" : "Morning Luxury Experience",
-                  description: dayNum === 1 ? "Private transfer to luxury accommodation with welcome amenities" : "Start your day with premium local exploration",
-                  location: `${currentDest.name} premium district`,
-                  duration: "2 hours",
-                  cost: budget === 'luxury' ? "$100" : "$50",
-                  tips: dayNum === 1 ? "Confirm transfer details 24h before arrival" : "Book early morning slots for best experience",
-                  bookingRequired: true,
-                  category: dayNum === 1 ? "arrival" : "culture"
-                },
-                {
-                  time: "02:00 PM",
-                  name: "Afternoon Premium Activity",
-                  description: wantsLocalExperiences ? "Exclusive local experience with cultural significance" : "Standard afternoon sightseeing",
-                  location: `Premium venue in ${currentDest.name}`,
-                  duration: "3 hours",
-                  cost: wantsLocalExperiences ? "$150" : "$75",
-                  tips: "Bring comfortable walking shoes and camera",
-                  bookingRequired: true,
-                  category: "experience"
-                },
-                {
-                  time: "07:30 PM",
-                  name: "Luxury Dining Experience",
-                  description: `Fine dining featuring ${dietaryRestrictions !== 'none' ? dietaryRestrictions + ' ' : ''}local cuisine`,
-                  location: `Award-winning restaurant in ${currentDest.name}`,
-                  duration: "2.5 hours",
-                  cost: budget === 'luxury' ? "$200" : "$100",
-                  tips: wantsRestaurantReservations ? "Reservation confirmed with dietary preferences noted" : "Reservations recommended",
-                  bookingRequired: wantsRestaurantReservations,
-                  category: "dining"
-                }
-              ],
-              meals: [
-                {
-                  time: "12:30 PM",
-                  type: "Lunch",
-                  restaurant: `Premium local restaurant`,
-                  cuisine: "Local specialties",
-                  cost: budget === 'luxury' ? "$80" : "$45",
-                  reservationNeeded: wantsRestaurantReservations
-                }
-              ],
-              transport: "Private transfers and premium local transport",
-              accommodation: `Luxury ${accommodation} with premium amenities and concierge service`
-            };
-          })
-        },
-        budget: {
-          total: maxBudget ? `$${maxBudget}` : budget === 'luxury' ? `$${tripDuration * 800}` : budget === 'moderate' ? `$${tripDuration * 400}` : `$${tripDuration * 200}`,
-          breakdown: {
-            accommodation: `$${Math.round((maxBudget || (budget === 'luxury' ? tripDuration * 800 : budget === 'moderate' ? tripDuration * 400 : tripDuration * 200)) * 0.35)}`,
-            food: `$${Math.round((maxBudget || (budget === 'luxury' ? tripDuration * 800 : budget === 'moderate' ? tripDuration * 400 : tripDuration * 200)) * 0.25)}`,
-            activities: `$${Math.round((maxBudget || (budget === 'luxury' ? tripDuration * 800 : budget === 'moderate' ? tripDuration * 400 : tripDuration * 200)) * 0.25)}`,
-            transport: `$${Math.round((maxBudget || (budget === 'luxury' ? tripDuration * 800 : budget === 'moderate' ? tripDuration * 400 : tripDuration * 200)) * 0.1)}`,
-            extras: `$${Math.round((maxBudget || (budget === 'luxury' ? tripDuration * 800 : budget === 'moderate' ? tripDuration * 400 : tripDuration * 200)) * 0.05)}`
-          },
-          dailyAverage: `$${Math.round((maxBudget || (budget === 'luxury' ? tripDuration * 800 : budget === 'moderate' ? tripDuration * 400 : tripDuration * 200)) / tripDuration)}`,
-          savingTips: ["Book luxury accommodations during shoulder season", "Use hotel loyalty programs for upgrades", "Book experiences directly for better rates"],
-          splurgeRecommendations: ["Private guided tours", "Michelin-starred dining", "Spa treatments", "Premium transport upgrades"]
-        },
-        packingTips: {
-          essentials: ["Comfortable luxury walking shoes", "Weather-appropriate elegant clothing", "Premium travel accessories"],
-          seasonal: "Season-specific luxury items and weather protection",
-          luxury: "Quality luggage, premium toiletries, elegant evening wear",
-          cultural: "Culturally appropriate attire for religious sites and fine dining"
-        },
-        localTips: {
-          cultural: ["Respect local customs and traditions", "Learn basic greetings in local language"],
-          practical: ["Use official luxury transport services", "Keep copies of important documents"],
-          safety: ["Stay in well-lit premium areas", "Use hotel concierge for recommendations"],
-          etiquette: ["Dress appropriately for fine dining", "Tip according to local customs"]
-        },
-        emergencyInfo: {
-          destinations: destinations.map((dest: Destination) => ({
-            name: dest.name,
-            emergencyNumber: "Local emergency services",
-            nearestHospital: `Premium medical facility in ${dest.name}`,
-            embassyInfo: "Embassy contact details and location",
-            importantNumbers: {
-              police: "Local police emergency",
-              medical: "Medical emergency services",
-              tourist: "Tourist assistance hotline"
-            }
-          }))
-        },
-        bookingChecklist: [
-          {
-            item: "Flights",
-            timeframe: "2-3 months before",
-            priority: "High",
-            notes: wantsFlightBooking ? "Book premium seats early. Consider travel insurance. Check visa requirements." : "Book in advance for better rates"
-          },
-          {
-            item: "Hotels",
-            timeframe: "1-2 months before",
-            priority: "High",
-            notes: wantsHotelRecommendations ? "Book directly for upgrades. Join loyalty programs. Request specific room types and floors." : "Book early for availability"
-          },
-          {
-            item: "Restaurant Reservations",
-            timeframe: "2-4 weeks before",
-            priority: wantsRestaurantReservations ? "High" : "Medium",
-            notes: wantsRestaurantReservations ? "Book premium restaurants early. Mention dietary restrictions and special occasions." : "Make reservations for popular restaurants"
-          },
-          {
-            item: "Local Experiences",
-            timeframe: "2-3 weeks before",
-            priority: wantsLocalExperiences ? "High" : "Medium",
-            notes: wantsLocalExperiences ? "Book exclusive experiences early. Confirm group sizes and special requirements." : "Book popular activities in advance"
+    
+    let parseSuccess = false;
+    let retryCount = 0;
+    const MAX_RETRIES = 2;
+    let lastError;
+    let lastResponse = itineraryResponse;
+    
+    while (!parseSuccess && retryCount < MAX_RETRIES) {
+      try {
+        console.log(`Attempt ${retryCount + 1} to parse itinerary JSON`);
+        let jsonString = lastResponse.trim();
+        
+        
+        const jsonMatch = jsonString.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (jsonMatch) {
+          jsonString = jsonMatch[1].trim();
+        }
+        
+        const firstBrace = jsonString.indexOf('{');
+        const lastBrace = jsonString.lastIndexOf('}');
+        
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+          jsonString = jsonString.substring(firstBrace, lastBrace + 1);
+        }
+        
+        
+        jsonString = jsonString
+          .replace(/,\s*}/g, '}') 
+          .replace(/,\s*]/g, ']') 
+          .replace(/\n/g, ' ') 
+          .replace(/\s+/g, ' '); 
+        
+        itineraryData = JSON.parse(jsonString);
+        
+        
+        if (!itineraryData.overview || !itineraryData.destinations || !itineraryData.itinerary) {
+          throw new Error("Invalid itinerary structure");
+        }
+        
+        
+        if (!itineraryData.itinerary.days || itineraryData.itinerary.days.length !== tripDuration) {
+          console.error(`ERROR: Expected ${tripDuration} days, got ${itineraryData.itinerary.days?.length || 0}`);
+          console.error("Generated days:", itineraryData.itinerary.days?.map((d: { day: number; title: string }) => `Day ${d.day}: ${d.title}`));
+          
+          
+          if (retryCount < MAX_RETRIES - 1) {
+            throw new Error(`Expected ${tripDuration} days, got ${itineraryData.itinerary.days?.length || 0}`);
+          } else {
+            return NextResponse.json(
+              { error: `AI generated only ${itineraryData.itinerary.days?.length || 0} days instead of the requested ${tripDuration} days. Please try again with a shorter trip or contact support.` },
+              { status: 500 }
+            );
           }
-        ]
-      };
-      
-      const bookingLinks: BookingLinks = {};
-      const primaryDest = destinations[0]?.name || '';
-      if (wantsHotelRecommendations && primaryDest) {
-        bookingLinks.hotels = await researchBookingLinks(
-          `best hotel booking links for ${primaryDest} from ${startDate} to ${endDate} for ${travelers} guests with ${budget} budget`
-        );
+        }
+        
+        
+        parseSuccess = true;
+        
+      } catch (error) {
+        lastError = error;
+        console.error(`Attempt ${retryCount + 1} failed to parse itinerary JSON:`, error);
+        
+        if (retryCount < MAX_RETRIES - 1) {
+          retryCount++;
+          console.log(`Retrying itinerary generation (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
+          
+          
+          const retryPrompt = `I need a valid JSON itinerary for a ${tripDuration}-day trip to ${destinations.map(d => d.name).join(', ')}. 
+The traveler is interested in ${interests.join(', ')}. 
+Budget level: ${budget}.
+Travel style: ${travelStyle}.
+
+CRITICAL: Return ONLY valid, parseable JSON with no markdown formatting or explanation. 
+CRITICAL: Include exactly ${tripDuration} days in the itinerary.days array.
+
+Follow this structure:
+{
+  "overview": "Brief trip overview",
+  "destinations": [{"name": "City", "country": "Country", "duration": days}],
+  "itinerary": {
+    "days": [
+      {
+        "day": 1,
+        "title": "Day title",
+        "activities": [{"time": "9:00 AM", "name": "Activity", "description": "Details"}]
+      },
+      // EXACTLY ${tripDuration} DAYS REQUIRED
+    ]
+  }
+}`;
+          
+          try {
+            const retryCompletion = await groq.chat.completions.create({
+              messages: [
+                {
+                  role: "system",
+                  content: "You are a travel planner who ONLY outputs valid JSON. No explanations, no markdown, just pure JSON."
+                },
+                {
+                  role: "user",
+                  content: retryPrompt
+                }
+              ],
+              model: "llama-3.3-70b-versatile",
+              temperature: 0.3, 
+              max_tokens: 1000, 
+              top_p: 0.95,
+            });
+            
+            lastResponse = retryCompletion.choices[0]?.message?.content || "Failed to generate itinerary";
+          } catch (apiError) {
+            console.error("API error during retry:", apiError);
+          }
+        } else {
+          
+          console.error("All parsing attempts failed");
+          console.error("Raw response length:", lastResponse.length);
+          console.error("Raw response preview:", lastResponse.substring(0, 500) + "...");
+          
+          return NextResponse.json(
+            { error: "Failed to generate itinerary after multiple attempts. Please try again." },
+            { status: 500 }
+          );
+        }
       }
-      if (wantsFlightBooking && departureLocation && primaryDest) {
-        bookingLinks.flights = await researchBookingLinks(
-          `best flight booking links from ${departureLocation} to ${primaryDest} departing ${startDate} returning ${endDate} for ${travelers} passengers`
-        );
-      }
-      if (primaryDest) {
-        bookingLinks.cars = await researchBookingLinks(
-          `best car rental booking links in ${primaryDest} from ${startDate} to ${endDate}`
-        );
-      }
-      if (wantsLocalExperiences && primaryDest) {
-        bookingLinks.activities = await researchBookingLinks(
-          `best activity booking links in ${primaryDest} between ${startDate} and ${endDate} within ${budget} budget`
-        );
-      }
-      if (wantsRestaurantReservations && primaryDest) {
-        bookingLinks.restaurants = await researchBookingLinks(
-          `best restaurant reservation links in ${primaryDest} for ${travelers} guests between ${startDate} and ${endDate}`
-        );
-      }
-      fallbackItinerary.bookingLinks = bookingLinks;
-      
-      const enhancedFallback = enhanceItineraryWithScrapedData(fallbackItinerary);
-      
-      return NextResponse.json(enhancedFallback);
     }
 
     const bookingLinks: BookingLinks = {};
@@ -1394,14 +1633,21 @@ Return ONLY valid JSON in this EXACT structure:
         `best activity booking links in ${primaryDest} between ${startDate} and ${endDate} within ${budget} budget`
       );
     }
-    if (wantsRestaurantReservations && primaryDest) {
-      bookingLinks.restaurants = await researchBookingLinks(
-        `best restaurant reservation links in ${primaryDest} for ${travelers} guests between ${startDate} and ${endDate}`
-      );
-    }
+
     if (typeof itineraryData === 'object' && itineraryData !== null) {
-      itineraryData = enhanceItineraryWithScrapedData(itineraryData);
+      itineraryData = enhanceItineraryWithScrapedData(itineraryData as StructuredItinerary);
       itineraryData.bookingLinks = bookingLinks;
+
+      
+      if (wantsHotelRecommendations && itineraryData?.bookingLinks?.accommodations) {
+        itineraryData.bookingLinks.accommodations = itineraryData.bookingLinks.accommodations.map((d: any) => {
+          const { location, checkIn, checkOut } = d;
+          return {
+            ...d,
+            url: `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(location)}&checkin=${checkIn}&checkout=${checkOut}&group_adults=${travelers}`
+          };
+        });
+      }
     }
 
     return NextResponse.json(itineraryData);

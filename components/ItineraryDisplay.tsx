@@ -1,9 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { StructuredItinerary } from '@/types/travel';
+import { getDestinationHeroImage, getActivityThumbnails, optimizeImageUrl, UnsplashImage } from '@/lib/utils/unsplash';
+import { Clock, MapPin, Wallet, Star, Camera, Navigation, Users, Calendar, FileText, Plane } from 'lucide-react';
 import BookingLinksDisplay from './BookingLinksDisplay';
+import jsPDF from 'jspdf';
 
 interface ItineraryDisplayProps {
   itinerary: StructuredItinerary | string;
@@ -11,6 +14,16 @@ interface ItineraryDisplayProps {
   startDate: string;
   endDate: string;
   isStructured: boolean;
+  wantsHotelRecommendations?: boolean;
+  wantsFlightBooking?: boolean;
+  showActivityImages?: boolean;
+}
+
+interface DestinationImages {
+  [key: string]: {
+    heroImage: UnsplashImage;
+    activityImages: { [activityName: string]: UnsplashImage | null };
+  };
 }
 
 export default function ItineraryDisplay({ 
@@ -18,15 +31,21 @@ export default function ItineraryDisplay({
   destination, 
   startDate, 
   endDate,
-  isStructured
+  isStructured,
+  wantsHotelRecommendations = true,
+  wantsFlightBooking = true,
+  showActivityImages = true  
 }: ItineraryDisplayProps) {
+  
+  
   const [isDownloading, setIsDownloading] = useState(false);
-  const [isPdfDownloading, setIsPdfDownloading] = useState(false);
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [activeDay, setActiveDay] = useState<number>(1);
-  const [activeDestination, setActiveDestination] = useState<string>('');
+  const [images, setImages] = useState<DestinationImages>({});
+  const [loadingImages, setLoadingImages] = useState(true);
 
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString: string) => { 
     const date = new Date(dateString);
     return date.toLocaleDateString('en-US', {
       weekday: 'long',
@@ -40,518 +59,768 @@ export default function ItineraryDisplay({
     ? itinerary as StructuredItinerary
     : null;
 
-  if (data && !activeDestination && data.destinations.length > 0) {
-    setActiveDestination(data.destinations[0].name);
+  
+  useEffect(() => {
+    if (data) {
+      
+      const sortedData = JSON.parse(JSON.stringify(data)) as StructuredItinerary;
+
+      
+      sortedData.itinerary.days.forEach(day => {
+        day.activities.sort((a, b) => {
+          
+          const getTimeValue = (timeStr: string) => {
+            
+            const timeMatch = timeStr.match(/^(\d{1,2}):?(\d{2})?\s*(AM|PM)?$/i);
+            
+            if (timeMatch) {
+              let hours = parseInt(timeMatch[1], 10);
+              const minutes = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+              const period = timeMatch[3]?.toUpperCase();
+              
+              
+              if (period === 'PM' && hours < 12) {
+                hours += 12;
+              } else if (period === 'AM' && hours === 12) {
+                hours = 0;
+              }
+              
+              return hours * 60 + minutes; 
+            }
+            
+            return 0; 
+          };
+          
+          return getTimeValue(a.time) - getTimeValue(b.time);
+        });
+      });
+      
+      
+      if (typeof itinerary !== 'string') {
+        
+        (itinerary as StructuredItinerary).itinerary.days = sortedData.itinerary.days;
+      }
+    }
+  }, [data, itinerary]);
+
+  
+  useEffect(() => {
+    async function loadImages() {
+      if (!data) return;
+      
+      setLoadingImages(true);
+      const newImages: DestinationImages = {};
+      
+      
+      const destinationActivities = new Map<string, string[]>();
+      
+      
+      data.itinerary.days.forEach(day => {
+        if (!destinationActivities.has(day.destination)) {
+          destinationActivities.set(day.destination, []);
+        }
+        const activities = destinationActivities.get(day.destination)!;
+        day.activities.forEach(activity => {
+          if (!activities.includes(activity.name)) {
+            activities.push(activity.name);
+          }
+        });
+      });
+      
+      
+      data.destinations.forEach(dest => {
+        if (!destinationActivities.has(dest.name)) {
+          destinationActivities.set(dest.name, []);
+        }
+        const activities = destinationActivities.get(dest.name)!;
+        dest.activities?.forEach(activity => {
+          if (!activities.includes(activity.name)) {
+            activities.push(activity.name);
+          }
+        });
+      });
+      
+      
+      for (const [destName, activityNames] of destinationActivities) {
+          console.log(`Loading individual images for ${destName} with ${activityNames.length} activities:`, activityNames);
+          
+          
+          const heroImage = await getDestinationHeroImage(destName);
+          
+          newImages[destName] = {
+            heroImage: heroImage,
+            activityImages: {}
+          };
+          
+        
+          const activityImagePromises = activityNames.map(async (activityName) => {
+            if (!showActivityImages) {
+              return { activityName, image: null };
+            }
+            console.log(`Fetching image for activity: ${activityName}`);
+            const activityImage = await getActivityThumbnails(activityName, destName);
+            return { activityName, image: activityImage };
+          });
+            
+        const activityImageResults = await Promise.all(activityImagePromises);
+            
+        
+        activityImageResults.forEach(({ activityName, image }) => {
+              newImages[destName].activityImages[activityName] = image;
+            });
+      }
+      
+      console.log('Loaded images for destinations:', Object.keys(newImages));
+      Object.entries(newImages).forEach(([dest, imgs]) => {
+        console.log(`${dest}: ${Object.keys(imgs.activityImages).length} activity images`);
+      });
+      
+      setImages(newImages);
+      setLoadingImages(false);
+    }
+    
+    loadImages();
+  }, [data]);
+
+  const availableTabs = [
+    'overview',
+    'daily-plan',
+    ...(wantsFlightBooking ? ['transport'] : []),
+    ...(wantsHotelRecommendations ? ['accommodation'] : []),
+    'budget',
+    'booking'
+  ];
+
+  if (!availableTabs.includes(activeTab)) {
+    setActiveTab(availableTabs[0]);
   }
 
-  const downloadItinerary = () => {
+  const downloadItinerary = async () => {
+    downloadPDFItinerary();
+  };
+  
+  const downloadPDFItinerary = async () => {
     setIsDownloading(true);
+    setIsGeneratingPDF(true);
     
     try {
-      let fileContent: string;
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+      });
+      
+      
+      pdf.setFillColor(59, 130, 246); 
+      pdf.rect(0, 0, pdf.internal.pageSize.getWidth(), 25, 'F');
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(16);
+      pdf.text(`Travel Itinerary: ${destination}`, 10, 10);
+      pdf.setFontSize(11);
+      pdf.text(`${formatDate(startDate)} to ${formatDate(endDate)}`, 10, 18);
+      
+      
+      pdf.setTextColor(0, 0, 0);
+      pdf.setFontSize(14);
+      pdf.text('Trip Overview', 10, 35);
+      pdf.setFontSize(10);
       
       if (data) {
-        fileContent = `# Travel Itinerary: ${destination}\n\n`;
-        fileContent += `**Trip Duration:** ${formatDate(startDate)} to ${formatDate(endDate)}\n\n`;
-        fileContent += `## Overview\n\n${data.overview}\n\n`;
-      
-        fileContent += `## Destinations\n\n`;
+        const splitOverview = pdf.splitTextToSize(data.overview, pdf.internal.pageSize.getWidth() - 20);
+        pdf.text(splitOverview, 10, 45);
+        
+        let yPosition = 45 + (splitOverview.length * 5);
+        
+        
+        pdf.setFontSize(14);
+        pdf.text('Destinations', 10, yPosition + 10);
+        yPosition += 15;
+        
         data.destinations.forEach((dest, index) => {
-          fileContent += `### ${index + 1}. ${dest.name} (${dest.duration} days)\n\n`;
-          fileContent += `${dest.description}\n\n`;
-          fileContent += `**Best Time to Visit:** ${dest.bestTimeToVisit}\n`;
-          fileContent += `**Currency:** ${dest.localCurrency}\n`;
-          fileContent += `**Languages:** ${dest.languages}\n\n`;
+          if (yPosition > pdf.internal.pageSize.getHeight() - 30) {
+            pdf.addPage();
+            yPosition = 20;
+          }
+          
+          pdf.setFontSize(12);
+          pdf.text(`${index + 1}. ${dest.name} (${dest.duration} days)`, 10, yPosition);
+          yPosition += 5;
+          
+          pdf.setFontSize(10);
+          const splitDesc = pdf.splitTextToSize(dest.description, pdf.internal.pageSize.getWidth() - 20);
+          pdf.text(splitDesc, 10, yPosition);
+          yPosition += (splitDesc.length * 5) + 5;
+          
+          pdf.text(`Best Time to Visit: ${dest.bestTimeToVisit}`, 10, yPosition);
+          yPosition += 5;
+          pdf.text(`Currency: ${dest.localCurrency}`, 10, yPosition);
+          yPosition += 5;
+          pdf.text(`Languages: ${dest.languages}`, 10, yPosition);
+          yPosition += 10;
         });
         
-        fileContent += `## Daily Itinerary\n\n`;
+        
+        pdf.addPage();
+        yPosition = 20;
+        pdf.setFontSize(14);
+        pdf.text('Daily Itinerary', 10, yPosition);
+        yPosition += 10;
+        
         data.itinerary.days.forEach(day => {
-          fileContent += `### Day ${day.day}: ${day.title}\n`;
-          fileContent += `**Date:** ${day.date} | **Location:** ${day.destination}\n\n`;
+          if (yPosition > pdf.internal.pageSize.getHeight() - 40) {
+            pdf.addPage();
+            yPosition = 20;
+          }
+          
+          pdf.setFontSize(12);
+          pdf.text(`Day ${day.day}: ${day.title}`, 10, yPosition);
+          yPosition += 5;
+          
+          pdf.setFontSize(10);
+          pdf.text(`Date: ${day.date} | Location: ${day.destination}`, 10, yPosition);
+          yPosition += 10;
           
           day.activities.forEach(activity => {
-            fileContent += `**${activity.time} - ${activity.name}**\n`;
-            fileContent += `${activity.description}\n`;
-            fileContent += `*Location:* ${activity.location} | *Duration:* ${activity.duration} | *Cost:* ${activity.cost}\n`;
-            if (activity.tips) fileContent += `*Tips:* ${activity.tips}\n`;
-            fileContent += '\n';
+            if (yPosition > pdf.internal.pageSize.getHeight() - 50) {
+              pdf.addPage();
+              yPosition = 20;
+            }
+            
+            pdf.setFontSize(11);
+            pdf.setFont('helvetica', 'bold');
+            pdf.text(`${activity.time} - ${activity.name}`, 10, yPosition);
+            yPosition += 5;
+            
+            pdf.setFont('helvetica', 'normal');
+            pdf.setFontSize(10);
+            const splitDesc = pdf.splitTextToSize(activity.description, pdf.internal.pageSize.getWidth() - 20);
+            pdf.text(splitDesc, 10, yPosition);
+            yPosition += (splitDesc.length * 5);
+            
+            pdf.text(`Location: ${activity.location} | Duration: ${activity.duration} | Cost: ${activity.cost}`, 10, yPosition);
+            yPosition += 5;
+            
+            if (activity.tips) {
+              const splitTips = pdf.splitTextToSize(`Tip: ${activity.tips}`, pdf.internal.pageSize.getWidth() - 20);
+              pdf.text(splitTips, 10, yPosition);
+              yPosition += (splitTips.length * 5);
+            }
+            
+            yPosition += 5;
           });
+          
+          yPosition += 5;
         });
         
-        fileContent += `## Budget Summary\n\n`;
-        fileContent += `**Total Estimated Cost:** ${data.budget.total}\n`;
-        fileContent += `**Daily Average:** ${data.budget.dailyAverage}\n\n`;
-        fileContent += `**Breakdown:**\n`;
-        fileContent += `- Accommodation: ${data.budget.breakdown.accommodation}\n`;
-        fileContent += `- Food: ${data.budget.breakdown.food}\n`;
-        fileContent += `- Activities: ${data.budget.breakdown.activities}\n`;
-        fileContent += `- Transport: ${data.budget.breakdown.transport}\n`;
-        fileContent += `- Extras: ${data.budget.breakdown.extras}\n\n`;
-      } else {
-        fileContent = `# Travel Itinerary: ${destination}\n\n${formatDate(startDate)} to ${formatDate(endDate)}\n\n${itinerary}`;
+        
+        if (yPosition > pdf.internal.pageSize.getHeight() - 80) {
+          pdf.addPage();
+          yPosition = 20;
+        } else {
+          yPosition += 10;
+        }
+        
+        pdf.setFontSize(14);
+        pdf.text('Budget Summary', 10, yPosition);
+        yPosition += 10;
+        
+        pdf.setFontSize(11);
+        pdf.text(`Total Estimated Cost: ${data.budget.total}`, 10, yPosition);
+        yPosition += 5;
+        pdf.text(`Daily Average: ${data.budget.dailyAverage}`, 10, yPosition);
+        yPosition += 10;
+        
+        pdf.text('Breakdown:', 10, yPosition);
+        yPosition += 5;
+        
+        pdf.setFontSize(10);
+        pdf.text(`• Accommodation: ${data.budget.breakdown.accommodation}`, 15, yPosition);
+        yPosition += 5;
+        pdf.text(`• Food: ${data.budget.breakdown.food}`, 15, yPosition);
+        yPosition += 5;
+        pdf.text(`• Activities: ${data.budget.breakdown.activities}`, 15, yPosition);
+        yPosition += 5;
+        pdf.text(`• Transport: ${data.budget.breakdown.transport}`, 15, yPosition);
+        yPosition += 5;
+        pdf.text(`• Extras: ${data.budget.breakdown.extras}`, 15, yPosition);
+        
+      } else if (typeof itinerary === 'string') {
+        const splitContent = pdf.splitTextToSize(itinerary, pdf.internal.pageSize.getWidth() - 20);
+        pdf.text(splitContent, 10, 45);
       }
       
-      const blob = new Blob([fileContent], { type: 'text/markdown' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
       
-      link.href = url;
-      link.download = `${destination.replace(/\s+/g, '-').toLowerCase()}-itinerary.md`;
+      const totalPages = pdf.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        pdf.setPage(i);
+        pdf.setFontSize(8);
+        pdf.setTextColor(150, 150, 150);
+        pdf.text(`${destination} Travel Itinerary - Page ${i} of ${totalPages}`, pdf.internal.pageSize.getWidth() / 2, pdf.internal.pageSize.getHeight() - 10, { align: 'center' });
+      }
       
-      document.body.appendChild(link);
-      link.click();
-      
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      pdf.save(`${destination.replace(/\s+/g, '-').toLowerCase()}-itinerary.pdf`);
     } catch (error) {
-      console.error('Error downloading itinerary:', error);
-      alert('Failed to download itinerary. Please try again.');
+      console.error('Error generating PDF itinerary:', error);
+      alert('Failed to generate PDF. Please try again.');
     } finally {
       setIsDownloading(false);
+      setIsGeneratingPDF(false);
     }
   };
 
-  const downloadPdf = async () => {
-    setIsPdfDownloading(true);
-    
-    try {
-      const printWindow = window.open('', '_blank');
-      
-      if (!printWindow) {
-        throw new Error('Could not open print window. Please check your popup settings.');
-      }
-      
-      const content = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>Travel Itinerary: ${destination}</title>
-          <style>
-            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }
-            h1 { color: #2563eb; border-bottom: 2px solid #2563eb; padding-bottom: 10px; }
-            h2 { color: #1d4ed8; margin-top: 30px; }
-            .day-header { background-color: #eff6ff; padding: 10px; border-radius: 5px; margin-top: 20px; }
-            .activity { margin-bottom: 15px; padding-left: 15px; border-left: 3px solid #dbeafe; }
-            @media print { body { padding: 0; margin: 0; } }
-          </style>
-        </head>
-        <body>
-          <h1>Travel Itinerary: ${destination}</h1>
-          <p><strong>From:</strong> ${formatDate(startDate)} <strong>To:</strong> ${formatDate(endDate)}</p>
-          ${data ? 
-            `<h2>Overview</h2><p>${data.overview}</p>` + 
-            data.itinerary.days.map(day => `
-              <div class="day-header">
-                <h3>Day ${day.day}: ${day.title}</h3>
-                <p><strong>Date:</strong> ${day.date} | <strong>Location:</strong> ${day.destination}</p>
-              </div>
-              ${day.activities.map(activity => `
-                <div class="activity">
-                  <h4>${activity.time} - ${activity.name}</h4>
-                  <p>${activity.description}</p>
-                  <p><strong>Location:</strong> ${activity.location} | <strong>Duration:</strong> ${activity.duration} | <strong>Cost:</strong> ${activity.cost}</p>
-                  ${activity.tips ? `<p><strong>Tips:</strong> ${activity.tips}</p>` : ''}
-                </div>
-              `).join('')}
-            `).join('')
-            : `<pre>${typeof itinerary === 'string' ? itinerary : ''}</pre>`
-          }
-        </body>
-        </html>
-      `;
-      
-      printWindow.document.write(content);
-      printWindow.document.close();
-      
-      printWindow.onload = function() {
-        printWindow.print();
-        printWindow.onafterprint = function() {
-          printWindow.close();
-        };
-      };
-    } catch (error) {
-      console.error('Error creating PDF:', error);
-      alert('Failed to create PDF. Please try again.');
-    } finally {
-      setIsPdfDownloading(false);
-    }
-  };
+  const getTabStyle = (tabName: string) => 
+    `px-8 py-4 text-sm font-medium transition-all duration-200 relative flex items-center whitespace-nowrap ${
+      activeTab === tabName 
+        ? 'bg-white text-blue-600 border-b-2 border-blue-600 -mb-px z-10 shadow-sm' 
+        : 'bg-gray-50 text-gray-600 hover:text-gray-800 hover:bg-gray-100 border-b border-gray-200'
+    }`;
 
-  const shareItinerary = () => {
-    if (navigator.share) {
-      navigator.share({
-        title: `Travel Itinerary: ${destination}`,
-        text: `Check out my travel itinerary for ${destination}!`,
-        url: window.location.href,
-      })
-      .catch((error) => console.error('Error sharing:', error));
-    } else {
-      alert('Sharing is not supported in your browser. You can copy the URL manually.');
-    }
-  };
-
-  const isTabActive = (tabName: string) => activeTab === tabName;
-  const getTabStyle = (tabName: string) => `px-6 py-3 text-sm font-medium rounded-t-lg transition-all ${isTabActive(tabName) 
-                    ? 'bg-teal-600 text-white border-b-2 border-teal-600' 
-    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border-b-2 border-transparent'}`;
-
-  const renderStructuredItinerary = () => {
-    if (!data) {
-      return (
-        <div className="prose prose-blue max-w-none">
-          <ReactMarkdown>{typeof itinerary === 'string' ? itinerary : ''}</ReactMarkdown>
-        </div>
-      );
-    }
-
+  if (!data) {
     return (
-      <div className="space-y-6">
-        <div className="border-b border-gray-200">
-          <nav className="-mb-px flex space-x-1 overflow-x-auto">
-            {[
-              { id: 'overview', label: 'Overview', icon: '🌟' },
-              { id: 'destinations', label: 'Destinations', icon: '📍' },
-              { id: 'transport', label: 'Transport', icon: '🚗' },
-              { id: 'accommodation', label: 'Stay', icon: '🏨' },
-              { id: 'itinerary', label: 'Daily Plan', icon: '📅' },
-              { id: 'budget', label: 'Budget', icon: '💰' },
-              { id: 'booking', label: 'Book Now', icon: '🔗' },
-              { id: 'tips', label: 'Tips', icon: '💡' }
-            ].map(tab => (
+      <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-200">
+        <div className="bg-gradient-to-r from-blue-600 to-purple-600 p-6 text-white">
+          <h2 className="text-2xl font-bold flex items-center">
+            <Plane className="w-6 h-6 mr-3" />
+            {destination}
+          </h2>
+          <p className="text-blue-100 mt-1">
+            {formatDate(startDate)} - {formatDate(endDate)}
+          </p>
+        </div>
+        <div className="p-6">
+          <div className="prose prose-blue max-w-none">
+            <ReactMarkdown>{typeof itinerary === 'string' ? itinerary : ''}</ReactMarkdown>
+          </div>
+              </div>
+    </div>
+  );
+}
+
+  return (
+    <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-200">
+      
+      <div className="relative h-64 bg-gradient-to-r from-blue-600 to-purple-600 overflow-hidden">
+        {data.destinations[0] && images[data.destinations[0].name]?.heroImage && !loadingImages && (
+          <>
+            <div className="absolute inset-0">
+              <img
+                src={optimizeImageUrl(images[data.destinations[0].name].heroImage, 1200, 300)}
+                alt={data.destinations[0].name}
+                className="w-full h-full object-cover transition-transform duration-700 hover:scale-105"
+              />
+            </div>
+            
+            <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/40 to-transparent"></div>
+            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent"></div>
+            <div className="absolute inset-0 bg-gradient-to-br from-blue-900/30 to-purple-900/30"></div>
+          </>
+        )}
+        <div className="relative z-10 p-6 text-white h-full flex flex-col justify-end">
+          <div className="flex justify-between items-end">
+            <div>
+              <h2 className="text-3xl font-bold mb-2 flex items-center">
+                <Plane className="w-8 h-8 mr-3" />
+                {destination}
+              </h2>
+              <p className="text-white/90 text-lg mb-2">
+                {formatDate(startDate)} - {formatDate(endDate)}
+              </p>
+              <div className="flex items-center gap-4 text-sm text-white/80">
+                <span className="flex items-center gap-1">
+                  <Calendar className="w-4 h-4" />
+                  {data.itinerary.days.length} days
+                </span>
+                <span className="flex items-center gap-1">
+                  <MapPin className="w-4 h-4" />
+                  {data.destinations.length} destinations
+                </span>
+              </div>
+            </div>
+            <div>
+              <div className="relative">
+                <button
+                  onClick={downloadItinerary}
+                  disabled={isDownloading}
+                  className="bg-white/20 hover:bg-white/30 text-white px-6 py-3 rounded-lg transition-all duration-200 flex items-center text-sm font-medium disabled:opacity-50 backdrop-blur-sm"
+                >
+                  {isDownloading ? (
+                    <>
+                      <div className="animate-spin w-4 h-4 mr-2 border-2 border-white/30 border-t-white rounded-full"></div>
+                      {isGeneratingPDF ? 'Generating PDF...' : 'Downloading...'}
+                    </>
+                  ) : (
+                    <>
+                      <FileText className="w-4 h-4 mr-2" />
+                      Download PDF
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      
+      <div className="border-b border-gray-200 bg-white">
+        <nav className="flex overflow-x-auto px-6 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+          {[
+            { id: 'overview', label: 'Trip Overview', icon: Star },
+            { id: 'daily-plan', label: 'Daily Plan', icon: Calendar },
+            ...(wantsFlightBooking ? [{ id: 'transport', label: 'Getting There', icon: Navigation }] : []),
+            ...(wantsHotelRecommendations ? [{ id: 'accommodation', label: 'Where to Stay', icon: Users }] : []),
+            { id: 'budget', label: 'Budget', icon: Wallet },
+            { id: 'booking', label: 'Book Now', icon: Camera }
+          ].map(tab => {
+            const Icon = tab.icon;
+            return (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={getTabStyle(tab.id)}
               >
-                <span className="mr-2">{tab.icon}</span>
+                <Icon className="w-4 h-4 mr-3" />
                 {tab.label}
               </button>
-            ))}
-          </nav>
-        </div>
-        
-        <div className="bg-white rounded-lg p-6">
-          {activeTab === 'overview' && (
-            <div className="space-y-6">
-              <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-6 rounded-xl border border-blue-200">
-                <h2 className="text-2xl font-bold text-gray-900 mb-4">Trip Overview</h2>
-                <p className="text-gray-700 text-lg leading-relaxed">{data.overview}</p>
-              </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {data.destinations.map((dest, index) => (
-                  <div key={index} className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow">
-                    <h3 className="text-xl font-bold text-gray-900 mb-2">{dest.name}</h3>
-                    <p className="text-gray-600 mb-4">{dest.description}</p>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span className="font-medium text-gray-700">Duration:</span>
-                        <span>{dest.duration} days</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="font-medium text-gray-700">Best Time:</span>
-                        <span>{dest.bestTimeToVisit}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="font-medium text-gray-700">Currency:</span>
-                        <span>{dest.localCurrency}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="font-medium text-gray-700">Languages:</span>
-                        <span>{dest.languages}</span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+            );
+          })}
+        </nav>
+      </div>
 
-              <div className="bg-red-50 border border-red-200 rounded-xl p-6">
-                <h3 className="text-lg font-bold text-red-900 mb-4">🚨 Emergency Information</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {data.emergencyInfo.destinations.map((emergency, index) => (
-                    <div key={index} className="space-y-2">
-                      <h4 className="font-medium text-red-800">{emergency.name}</h4>
-                      <div className="text-sm space-y-1">
-                        <div><strong>Emergency:</strong> {emergency.emergencyNumber}</div>
-                        <div><strong>Hospital:</strong> {emergency.nearestHospital}</div>
-                        <div><strong>Embassy:</strong> {emergency.embassyInfo}</div>
-                      </div>
+      
+      <div className="p-6">
+        {activeTab === 'overview' && (
+          <div className="space-y-8">
+            
+            <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-6 rounded-xl border border-blue-200">
+              <h3 className="text-2xl font-bold text-gray-900 mb-4">Your Journey Awaits</h3>
+              <p className="text-gray-700 text-lg leading-relaxed">{data.overview}</p>
+            </div>
+
+            
+            {data.tripHighlights && data.tripHighlights.length > 0 && (
+              <div>
+                <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
+                  <Star className="w-5 h-5 mr-2 text-yellow-500" />
+                  Trip Highlights
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {data.tripHighlights.map((highlight, index) => (
+                    <div key={index} className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow">
+                      <h4 className="text-lg font-bold text-gray-900 mb-3">{highlight.name}</h4>
+                      <p className="text-gray-600">{highlight.description}</p>
                     </div>
                   ))}
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {activeTab === 'destinations' && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-bold text-gray-900">Destination Activities</h2>
-              
-              <div className="flex flex-wrap gap-2 mb-6">
-                {data.destinations.map((dest) => (
-                  <button
-                    key={dest.name}
-                    onClick={() => setActiveDestination(dest.name)}
-                    className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
-                      activeDestination === dest.name
-                        ? 'bg-teal-600 text-white'
-                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                    }`}
-                  >
-                    {dest.name}
-                  </button>
-                ))}
-              </div>
-
-              {data.destinations
-                .filter(dest => dest.name === activeDestination)
-                .map((dest) => (
-                  <div key={dest.name} className="space-y-4">
-                    <div className="bg-teal-50 p-6 rounded-xl">
-                      <h3 className="text-xl font-bold text-teal-900 mb-2">{dest.name}</h3>
-                      <p className="text-teal-800">{dest.description}</p>
-                    </div>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {dest.activities.map((activity, index) => (
-                        <div key={index} className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
-                          <div className="flex justify-between items-start mb-2">
-                            <h4 className="font-bold text-gray-900">{activity.name}</h4>
-                            <span className="text-xs bg-teal-100 text-teal-800 px-2 py-1 rounded-full">{activity.category}</span>
-                          </div>
-                          <p className="text-gray-600 text-sm mb-3">{activity.description}</p>
-                          <div className="flex justify-between text-sm">
-                            <span className="text-gray-500">⏱️ {activity.duration}</span>
-                            <span className="font-medium text-green-600">{activity.cost}</span>
-                          </div>
-                        </div>
+            
+            {data.culturalTips && (
+              <div>
+                <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
+                  <span className="text-2xl mr-2">🌍</span>
+                  Cultural Insights
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="bg-white border border-gray-200 rounded-xl p-6">
+                    <h4 className="font-bold text-gray-900 mb-3 flex items-center">
+                      <span className="mr-2">🤝</span>
+                      Etiquette & Customs
+                    </h4>
+                    <ul className="space-y-2">
+                      {[...data.culturalTips.etiquette, ...data.culturalTips.customs].map((tip, i) => (
+                        <li key={i} className="text-gray-600 text-sm flex items-start">
+                          <span className="w-2 h-2 bg-blue-400 rounded-full mr-3 mt-2"></span>
+                          {tip}
+                        </li>
                       ))}
-                    </div>
+                    </ul>
+                  </div>
+                  <div className="bg-white border border-gray-200 rounded-xl p-6">
+                    <h4 className="font-bold text-gray-900 mb-3 flex items-center">
+                      <span className="mr-2">🛡️</span>
+                      Language & Safety
+                    </h4>
+                    <ul className="space-y-2">
+                      {[...data.culturalTips.language, ...data.culturalTips.safety].map((tip, i) => (
+                        <li key={i} className="text-gray-600 text-sm flex items-start">
+                          <span className="w-2 h-2 bg-green-400 rounded-full mr-3 mt-2"></span>
+                          {tip}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            )}
 
-                    {data.bookingLinks?.activities && (
-                      <div className="mt-6 bg-orange-50 border border-orange-200 rounded-xl p-6">
-                        <h4 className="text-lg font-bold text-orange-900 mb-4">🎯 Book Activities in {dest.name}</h4>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                          {data.bookingLinks.activities.slice(0, 6).map((link, index) => (
-                            <div key={index} className="bg-white border border-orange-100 rounded-lg p-4">
-                              <h5 className="font-semibold text-gray-900 text-sm mb-2">{link.platform}</h5>
-                              <p className="text-xs text-gray-600 mb-3 line-clamp-2">{link.description}</p>
-                              <div className="mb-3">
-                                <div className="text-xs text-gray-600 mb-1">Key Features:</div>
-                                <ul className="text-xs text-gray-600 space-y-1">
-                                  {link.features.slice(0, 2).map((feature, featureIndex) => (
-                                    <li key={featureIndex} className="flex items-start">
-                                      <span className="text-orange-500 mr-1">•</span>
-                                      {feature}
-                                    </li>
-                                  ))}
-                                </ul>
-                              </div>
-                              <a
-                                href={link.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center justify-center w-full px-3 py-2 bg-orange-600 text-white text-xs font-medium rounded-md hover:bg-orange-700 transition-colors"
-                              >
-                                Book on {link.platform}
-                                <svg className="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
-                                </svg>
-                              </a>
-                            </div>
-                          ))}
-                        </div>
+            
+            <div>
+              <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
+                <MapPin className="w-5 h-5 mr-2 text-red-500" />
+                Your Destinations
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {data.destinations.map((dest, index) => (
+                  <div key={index} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+                    {images[dest.name]?.heroImage && !loadingImages && (
+                      <div className="h-48 overflow-hidden">
+                        <img
+                          src={optimizeImageUrl(images[dest.name].heroImage, 600, 200)}
+                          alt={dest.name}
+                          className="w-full h-full object-cover hover:scale-105 transition-transform duration-300"
+                        />
                       </div>
                     )}
+                    <div className="p-6">
+                      <h4 className="text-xl font-bold text-gray-900 mb-2">{dest.name}</h4>
+                      <p className="text-gray-600 mb-4">{dest.description}</p>
+                      <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div className="flex justify-between">
+                          <span className="font-medium text-gray-700">Duration:</span>
+                          <span>{dest.duration} days</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="font-medium text-gray-700">Best Time:</span>
+                          <span>{dest.bestTimeToVisit}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="font-medium text-gray-700">Currency:</span>
+                          <span>{dest.localCurrency}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="font-medium text-gray-700">Languages:</span>
+                          <span>{dest.languages}</span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 ))}
+              </div>
             </div>
-          )}
+          </div>
+        )}
 
-          {activeTab === 'itinerary' && (
-            <div className="space-y-6">
+        {activeTab === 'daily-plan' && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
               <h2 className="text-2xl font-bold text-gray-900">Daily Itinerary</h2>
               
-              <div className="flex flex-wrap gap-2 mb-6">
+              
+              <div className="flex space-x-1 overflow-x-auto bg-gray-100 rounded-lg p-1">
                 {data.itinerary.days.map((day) => (
                   <button
                     key={day.day}
                     onClick={() => setActiveDay(day.day)}
-                    className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                    className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${
                       activeDay === day.day
-                        ? 'bg-teal-600 text-white'
-                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                        ? 'bg-white text-blue-600 shadow-sm'
+                        : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
                     }`}
                   >
                     Day {day.day}
                   </button>
                 ))}
               </div>
+            </div>
 
-              {data.itinerary.days
-                .filter(day => day.day === activeDay)
-                .map((day) => (
-                  <div key={day.day} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
-                    <div className="bg-teal-600 p-6 text-white">
-                      <h3 className="text-2xl font-bold">Day {day.day}: {day.title}</h3>
-                      <p className="text-teal-100">{day.date} • {day.destination}</p>
-                    </div>
-                    
-                    <div className="p-6 space-y-6">
-                      {day.activities.map((activity, index) => (
-                        <div key={index} className="flex space-x-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
-                          <div className="flex-shrink-0 w-16 text-center">
-                            <div className="bg-teal-600 text-white px-2 py-1 rounded text-sm font-medium">
-                              {activity.time}
-                            </div>
-                          </div>
-                          <div className="flex-1">
-                            <h4 className="text-lg font-bold text-gray-900 mb-2">{activity.name}</h4>
-                            <p className="text-gray-600 mb-3">{activity.description}</p>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm text-gray-500 mb-2">
-                              <div>📍 {activity.location}</div>
-                              <div>⏱️ {activity.duration}</div>
-                              <div>💰 {activity.cost}</div>
-                            </div>
-                            {activity.tips && (
-                              <div className="bg-yellow-50 border-l-4 border-yellow-400 p-3 rounded">
-                                <p className="text-yellow-800 text-sm"><strong>💡 Tip:</strong> {activity.tips}</p>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ))}
+            
+            {data.itinerary.days
+              .filter(day => day.day === activeDay)
+              .map((day) => (
+                <div key={day.day} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                  
+                  <div className="bg-gradient-to-r from-blue-600 to-purple-600 p-6 text-white">
+                    <h3 className="text-2xl font-bold">Day {day.day}: {day.title}</h3>
+                    <div className="flex items-center gap-4 mt-2 text-blue-100">
+                      <span className="flex items-center gap-1">
+                        <Calendar className="w-4 h-4" />
+                        {day.date}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <MapPin className="w-4 h-4" />
+                        {day.destination}
+                      </span>
                     </div>
                   </div>
-                ))}
-            </div>
-          )}
-
-          {activeTab === 'budget' && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-bold text-gray-900">Budget Summary</h2>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-green-50 border border-green-200 rounded-xl p-6">
-                  <h3 className="text-lg font-bold text-green-900 mb-4">Total Cost</h3>
-                  <div className="text-3xl font-bold text-green-700 mb-2">{data.budget.total}</div>
-                  <div className="text-sm text-green-600">Average: {data.budget.dailyAverage}/day</div>
-                </div>
-                
-                <div className="space-y-3">
-                  <h3 className="text-lg font-bold text-gray-900">Breakdown</h3>
-                  {Object.entries(data.budget.breakdown).map(([key, value]) => (
-                    <div key={key} className="flex justify-between py-2 border-b border-gray-200">
-                      <span className="capitalize font-medium">{key}:</span>
-                      <span className="font-bold">{value}</span>
+                  
+                  
+                  <div className="p-6">
+                    <div className="relative">
+                      
+                      <div className="absolute left-16 top-0 bottom-0 w-0.5 bg-gradient-to-b from-blue-300 to-purple-300"></div>
+                      
+                      <div className="space-y-6">
+                        {day.activities.map((activity, index) => (
+                          <div key={index} className="relative flex items-start space-x-6">
+                            
+                            <div className="flex-shrink-0 relative z-10">
+                              <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-3 py-2 rounded-lg text-sm font-medium shadow-lg">
+                                {activity.time}
+                              </div>
+                              
+                              <div className="absolute -right-2 top-1/2 transform -translate-y-1/2 w-4 h-4 bg-white border-2 border-blue-500 rounded-full"></div>
+                            </div>
+                            
+                            
+                            <div className="flex-1 bg-gray-50 rounded-xl p-6 hover:bg-gray-100 transition-colors">
+                              <div className="flex items-start justify-between mb-3">
+                                <div className="flex-1">
+                                  <h4 className="text-lg font-bold text-gray-900 mb-1">{activity.name}</h4>
+                                  {activity.location && (
+                                    <p className="text-sm text-gray-600 flex items-center mb-2">
+                                      <MapPin className="w-4 h-4 mr-1" />
+                                      {activity.location}
+                                    </p>
+                                  )}
+                                </div>
+                                {images[day.destination]?.activityImages[activity.name] && !loadingImages && (
+                                  <div className="w-20 h-20 rounded-lg overflow-hidden ml-4">
+                                    <img
+                                      src={optimizeImageUrl(images[day.destination].activityImages[activity.name]!, 160, 160)}
+                                      alt={activity.name}
+                                      className="w-full h-full object-cover"
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                              
+                              <p className="text-gray-700 mb-4">{activity.description}</p>
+                              
+                              <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm text-gray-600 mb-4">
+                                <div className="flex items-center">
+                                  <Clock className="w-4 h-4 mr-1" />
+                                  {activity.duration}
+                                </div>
+                                <div className="flex items-center">
+                                  <Wallet className="w-4 h-4 mr-1" />
+                                  {activity.cost}
+                                </div>
+                                {activity.bookingRequired && (
+                                  <div className="flex items-center">
+                                    <Camera className="w-4 h-4 mr-1" />
+                                    Booking Required
+                                  </div>
+                                )}
+                              </div>
+                              
+                              {activity.tips && (
+                                <div className="bg-yellow-50 border-l-4 border-yellow-400 p-3 rounded-r">
+                                  <p className="text-yellow-800 text-sm">
+                                    <span className="font-semibold">💡 Tip:</span> {activity.tips}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  ))}
+                  </div>
                 </div>
-              </div>
-              
-              <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-6">
-                <h3 className="text-lg font-bold text-yellow-900 mb-4">💡 Money-Saving Tips</h3>
-                <ul className="space-y-2">
-                  {data.budget.savingTips.map((tip, index) => (
-                    <li key={index} className="text-yellow-800">• {tip}</li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          )}
+              ))}
+          </div>
+        )}
 
-          {activeTab === 'transport' && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-bold text-gray-900">Transportation Guide</h2>
-              
-              <div className="bg-teal-50 border border-teal-200 rounded-xl p-6">
-                <h3 className="text-lg font-bold text-teal-900 mb-4">✈️ Getting There</h3>
+        
+        {activeTab === 'transport' && wantsFlightBooking && (
+          <div className="space-y-6">
+            <h2 className="text-2xl font-bold text-gray-900 flex items-center">
+              <Navigation className="w-6 h-6 mr-3 text-blue-600" />
+              Getting There & Around
+            </h2>
+            
+            
+            {data.transport.gettingThere.flights.length > 0 && (
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-6">
+                <h3 className="text-xl font-bold text-blue-900 mb-4 flex items-center">
+                  <Plane className="w-5 h-5 mr-2" />
+                  Flight Options
+                </h3>
                 <div className="space-y-4">
                   {data.transport.gettingThere.flights.map((flight, index) => (
-                                          <div key={index} className="bg-white rounded-lg p-4 border border-teal-100">
+                    <div key={index} className="bg-white rounded-lg p-4 border border-blue-100">
                       <div className="flex justify-between items-start mb-3">
-                        <h4 className="font-bold text-gray-900">{flight.from} → {flight.to}</h4>
-                        <span className="text-lg font-bold text-green-600">{flight.estimatedCost}</span>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                         <div>
-                          <p><strong>Duration:</strong> {flight.duration}</p>
-                          <p><strong>Airlines:</strong> {flight.airlines.join(', ')}</p>
+                          <h4 className="font-bold text-gray-900">{flight.from} → {flight.to}</h4>
+                          <p className="text-sm text-gray-600">Airlines: {flight.airlines.join(', ')}</p>
                         </div>
-                        <div>
-                          <p><strong>Class Options:</strong> {flight.classOptions?.join(', ')}</p>
-                          <p><strong>Seasonal Pricing:</strong> {flight.seasonalPricing}</p>
-                        </div>
+                        {flight.estimatedCost && (
+                          <span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium">
+                            {flight.estimatedCost}
+                          </span>
+                        )}
                       </div>
+                      
+                      {flight.options && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                          {flight.options.map((option, optionIndex) => (
+                            <div key={optionIndex} className="bg-gray-50 rounded-lg p-4">
+                              <h5 className="font-semibold text-gray-900 mb-2">{option.class}</h5>
+                              <div className="space-y-1 text-sm">
+                                <div className="flex justify-between">
+                                  <span>Cost:</span>
+                                  <span className="font-medium">{option.estimatedCost}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>Duration:</span>
+                                  <span>{option.duration}</span>
+                                </div>
+                              </div>
+                              <div className="mt-3">
+                                <div className="text-xs text-green-600 mb-1">Pros:</div>
+                                <ul className="text-xs text-gray-600 space-y-1">
+                                  {option.pros.map((pro, proIndex) => (
+                                    <li key={proIndex} className="flex items-start">
+                                      <span className="text-green-500 mr-1">•</span>
+                                      {pro}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      
                       {flight.bookingTips && (
-                        <div className="mt-3 p-3 bg-yellow-50 border-l-4 border-yellow-400 rounded">
-                          <p className="text-yellow-800 text-sm"><strong>💡 Booking Tips:</strong> {flight.bookingTips}</p>
+                        <div className="mt-4 bg-yellow-50 border-l-4 border-yellow-400 p-3 rounded-r">
+                          <p className="text-yellow-800 text-sm">
+                            <span className="font-semibold">✈️ Booking Tips:</span> {flight.bookingTips}
+                          </p>
                         </div>
                       )}
                     </div>
                   ))}
                 </div>
               </div>
+            )}
 
-              {data.transport.betweenDestinations.length > 0 && (
-                <div className="bg-green-50 border border-green-200 rounded-xl p-6">
-                  <h3 className="text-lg font-bold text-green-900 mb-4">🚗 Between Destinations</h3>
-                  <div className="space-y-4">
-                    {data.transport.betweenDestinations.map((route, index) => (
-                      <div key={index} className="bg-white rounded-lg p-4 border border-green-100">
-                        <h4 className="font-bold text-gray-900 mb-3">{route.from} → {route.to}</h4>
-                        <div className="space-y-3">
-                          {route.options.map((option, optIndex) => (
-                            <div key={optIndex} className="border-l-4 border-green-400 pl-4">
-                              <div className="flex justify-between items-start mb-2">
-                                <h5 className="font-medium text-gray-900">{option.type}</h5>
-                                <span className="font-bold text-green-600">{option.cost}</span>
-                              </div>
-                              <p className="text-gray-600 text-sm mb-2">{option.description}</p>
-                              <div className="text-xs text-gray-500">
-                                <span className="mr-4">⏱️ {option.duration}</span>
-                                {option.bookingInfo && <span>📋 {option.bookingInfo}</span>}
-                              </div>
-                              {option.pros && option.cons && (
-                                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
-                                  <div>
-                                    <strong className="text-green-700">Pros:</strong>
-                                    <ul className="list-disc list-inside text-green-600">
-                                      {option.pros.map((pro, i) => <li key={i}>{pro}</li>)}
-                                    </ul>
-                                  </div>
-                                  <div>
-                                    <strong className="text-red-700">Cons:</strong>
-                                    <ul className="list-disc list-inside text-red-600">
-                                      {option.cons.map((con, i) => <li key={i}>{con}</li>)}
-                                    </ul>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="bg-purple-50 border border-purple-200 rounded-xl p-6">
-                <h3 className="text-lg font-bold text-purple-900 mb-4">🚌 Local Transportation</h3>
+            
+            {data.transport.localTransport.length > 0 && (
+              <div className="bg-green-50 border border-green-200 rounded-xl p-6">
+                <h3 className="text-xl font-bold text-green-900 mb-4">
+                  🚌 Local Transportation
+                </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {data.transport.localTransport.map((local, index) => (
-                    <div key={index} className="bg-white rounded-lg p-4 border border-purple-100">
-                      <h4 className="font-bold text-gray-900 mb-3">{local.destination}</h4>
-                      <div className="space-y-2">
-                        {local.options.map((option, optIndex) => (
-                          <div key={optIndex} className="flex justify-between items-center p-2 bg-purple-50 rounded">
-                            <div>
+                  {data.transport.localTransport.map((transport, index) => (
+                    <div key={index} className="bg-white rounded-lg p-4 border border-green-100">
+                      <h4 className="font-bold text-gray-900 mb-3">{transport.destination}</h4>
+                      <div className="space-y-3">
+                        {transport.options.map((option, optionIndex) => (
+                          <div key={optionIndex} className="bg-gray-50 rounded-lg p-3">
+                            <div className="flex justify-between items-start mb-2">
                               <span className="font-medium text-gray-900">{option.type}</span>
-                              <p className="text-xs text-gray-600">{option.description}</p>
-                              {option.apps && <p className="text-xs text-purple-600">📱 {option.apps}</p>}
+                              <span className="text-green-600 font-medium">{option.cost}</span>
                             </div>
-                            <span className="font-bold text-purple-600">{option.cost}</span>
+                            <p className="text-sm text-gray-600 mb-2">{option.description}</p>
+                            {option.apps && (
+                              <p className="text-xs text-blue-600">
+                                📱 Recommended app: {option.apps}
+                              </p>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -559,444 +828,191 @@ export default function ItineraryDisplay({
                   ))}
                 </div>
               </div>
+            )}
+          </div>
+        )}
 
-              {data.bookingLinks?.flights && (
-                <div className="bg-green-50 border border-green-200 rounded-xl p-6">
-                  <h3 className="text-lg font-bold text-green-900 mb-4">✈️ Book Your Flights</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {data.bookingLinks.flights.slice(0, 6).map((link, index) => (
-                      <div key={index} className="bg-white border border-green-100 rounded-lg p-4">
-                        <h5 className="font-semibold text-gray-900 text-sm mb-2">{link.platform}</h5>
-                        <p className="text-xs text-gray-600 mb-3 line-clamp-2">{link.description}</p>
-                        <div className="mb-3">
-                          <div className="text-xs text-gray-600 mb-1">Key Features:</div>
-                          <ul className="text-xs text-gray-600 space-y-1">
-                            {link.features.slice(0, 2).map((feature, featureIndex) => (
-                              <li key={featureIndex} className="flex items-start">
-                                <span className="text-green-500 mr-1">•</span>
-                                {feature}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                        <a
-                          href={link.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center justify-center w-full px-3 py-2 bg-green-600 text-white text-xs font-medium rounded-md hover:bg-green-700 transition-colors"
-                        >
-                          Book on {link.platform}
-                          <svg className="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
-                          </svg>
-                        </a>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {data.bookingLinks?.cars && (
-                <div className="bg-purple-50 border border-purple-200 rounded-xl p-6">
-                  <h3 className="text-lg font-bold text-purple-900 mb-4">🚗 Rent a Car</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {data.bookingLinks.cars.slice(0, 6).map((link, index) => (
-                      <div key={index} className="bg-white border border-purple-100 rounded-lg p-4">
-                        <h5 className="font-semibold text-gray-900 text-sm mb-2">{link.platform}</h5>
-                        <p className="text-xs text-gray-600 mb-3 line-clamp-2">{link.description}</p>
-                        <div className="mb-3">
-                          <div className="text-xs text-gray-600 mb-1">Key Features:</div>
-                          <ul className="text-xs text-gray-600 space-y-1">
-                            {link.features.slice(0, 2).map((feature, featureIndex) => (
-                              <li key={featureIndex} className="flex items-start">
-                                <span className="text-purple-500 mr-1">•</span>
-                                {feature}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                        <a
-                          href={link.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center justify-center w-full px-3 py-2 bg-purple-600 text-white text-xs font-medium rounded-md hover:bg-purple-700 transition-colors"
-                        >
-                          Book on {link.platform}
-                          <svg className="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
-                          </svg>
-                        </a>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'accommodation' && (
+        
+        {activeTab === 'accommodation' && wantsHotelRecommendations && (
+          <div className="space-y-6">
+            <h2 className="text-2xl font-bold text-gray-900 flex items-center">
+              <Users className="w-6 h-6 mr-3 text-purple-600" />
+              Where to Stay
+            </h2>
+            
             <div className="space-y-6">
-              <h2 className="text-2xl font-bold text-gray-900">Where to Stay</h2>
-              
-              {data.accommodation.recommendations.map((destination, destIndex) => (
-                <div key={destIndex} className="space-y-6">
-                  <h3 className="text-xl font-bold text-gray-800 border-b border-gray-200 pb-2">
-                    🏙️ {destination.destination}
-                  </h3>
+              {data.accommodation.recommendations.map((rec, index) => (
+                <div key={index} className="bg-purple-50 border border-purple-200 rounded-xl p-6">
+                  <h3 className="text-xl font-bold text-purple-900 mb-4">{rec.destination}</h3>
                   
-                  {destination.options ? (
-                    <div className="space-y-6">
-                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        {destination.options.map((hotel, hotelIndex) => (
-                          <div key={hotelIndex} className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow">
-                            <div className="mb-4">
-                              <div className="flex justify-between items-start mb-2">
-                                <h4 className="text-lg font-bold text-gray-900">{hotel.name}</h4>
-                                <span className={`px-2 py-1 text-xs rounded-full ${
-                                  hotel.bestFor?.includes('Budget') ? 'bg-green-100 text-green-800' :
-                                  hotel.bestFor?.includes('Luxury') ? 'bg-purple-100 text-purple-800' :
-                                  'bg-blue-100 text-blue-800'
-                                }`}>
-                                  {hotel.bestFor}
-                                </span>
-                              </div>
-                              <p className="text-gray-600 text-sm">{hotel.type}</p>
-                              <div className="flex items-center mt-1">
-                                <span className="text-yellow-500">{'★'.repeat(parseInt(hotel.rating?.charAt(0) || '3'))}</span>
-                                <span className="ml-2 text-sm text-gray-500">{hotel.rating}</span>
-                              </div>
+                  {rec.options ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {rec.options.map((option, optionIndex) => (
+                        <div key={optionIndex} className="bg-white border border-purple-100 rounded-lg p-4">
+                          <div className="flex justify-between items-start mb-3">
+                            <h4 className="font-bold text-gray-900">{option.name}</h4>
+                            {option.rating && (
+                              <span className="bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full text-xs font-medium">
+                                ⭐ {option.rating}
+                              </span>
+                            )}
+                          </div>
+                          
+                          <div className="space-y-2 text-sm mb-4">
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Type:</span>
+                              <span className="font-medium">{option.type}</span>
                             </div>
-                            
-                            <div className="mb-4">
-                              <div className="text-lg font-bold text-green-600 mb-1">{hotel.priceRange}</div>
-                              <p className="text-gray-600 text-sm">📍 {hotel.location}</p>
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Price:</span>
+                              <span className="font-medium text-green-600">{option.priceRange}</span>
                             </div>
-
-                            <div className="mb-4">
-                              <h5 className="font-medium text-gray-900 mb-2">✨ Highlights</h5>
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Location:</span>
+                              <span className="font-medium">{option.location}</span>
+                            </div>
+                          </div>
+                          
+                          <div className="space-y-3">
+                            <div>
+                              <div className="text-xs text-gray-600 mb-1">Highlights:</div>
                               <div className="flex flex-wrap gap-1">
-                                {hotel.highlights.map((highlight, i) => (
-                                  <span key={i} className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
+                                {option.highlights.slice(0, 3).map((highlight, hIndex) => (
+                                  <span key={hIndex} className="bg-purple-100 text-purple-700 px-2 py-1 rounded text-xs">
                                     {highlight}
                                   </span>
                                 ))}
                               </div>
                             </div>
-
-                            <div className="grid grid-cols-1 gap-3 mb-4 text-sm">
-                              <div>
-                                <h6 className="font-medium text-green-700 mb-1">👍 Pros</h6>
-                                <ul className="list-disc list-inside text-green-600 space-y-1">
-                                  {hotel.pros.map((pro, i) => <li key={i}>{pro}</li>)}
-                                </ul>
-                              </div>
-                              <div>
-                                <h6 className="font-medium text-red-700 mb-1">👎 Cons</h6>
-                                <ul className="list-disc list-inside text-red-600 space-y-1">
-                                  {hotel.cons.map((con, i) => <li key={i}>{con}</li>)}
-                                </ul>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                      
-                      {destination.bookingTips && (
-                        <div className="p-4 bg-yellow-50 border-l-4 border-yellow-400 rounded">
-                          <p className="text-yellow-800 text-sm"><strong>💡 Booking Tips:</strong> {destination.bookingTips}</p>
-                        </div>
-                      )}
-                      
-                      {destination.generalTips && (
-                        <div className="p-4 bg-blue-50 border-l-4 border-blue-400 rounded">
-                          <p className="text-blue-800 text-sm"><strong>🎯 How to Choose:</strong> {destination.generalTips}</p>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-                      <div className="flex justify-between items-start mb-4">
-                        <div>
-                          <h4 className="text-xl font-bold text-gray-900">{destination.name}</h4>
-                          <p className="text-gray-600">{destination.destination}</p>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-lg font-bold text-green-600">{destination.priceRange}</div>
-                          <div className="text-xs text-gray-500">{destination.type}</div>
-                        </div>
-                      </div>
-                      
-                      {destination.highlights && (
-                        <div className="mb-4">
-                          <h5 className="font-medium text-gray-900 mb-2">✨ Highlights</h5>
-                          <div className="flex flex-wrap gap-2">
-                            {destination.highlights.map((highlight, i) => (
-                              <span key={i} className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
-                                {highlight}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      
-                      {destination.bookingTips && (
-                        <div className="p-3 bg-yellow-50 border-l-4 border-yellow-400 rounded">
-                          <p className="text-yellow-800 text-sm"><strong>💡 Booking Tips:</strong> {destination.bookingTips}</p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {data.bookingLinks?.hotels && (
-                    <div className="mt-6 bg-blue-50 border border-blue-200 rounded-xl p-6">
-                      <h4 className="text-lg font-bold text-blue-900 mb-4">🔗 Book Hotels in {destination.destination}</h4>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {data.bookingLinks.hotels.slice(0, 6).map((link, index) => (
-                          <div key={index} className="bg-white border border-blue-100 rounded-lg p-4">
-                            <h5 className="font-semibold text-gray-900 text-sm mb-2">{link.platform}</h5>
-                            <p className="text-xs text-gray-600 mb-3 line-clamp-2">{link.description}</p>
-                            <div className="mb-3">
-                              <div className="text-xs text-gray-600 mb-1">Key Features:</div>
+                            
+                            <div>
+                              <div className="text-xs text-green-600 mb-1">Pros:</div>
                               <ul className="text-xs text-gray-600 space-y-1">
-                                {link.features.slice(0, 2).map((feature, featureIndex) => (
-                                  <li key={featureIndex} className="flex items-start">
+                                {option.pros.slice(0, 2).map((pro, proIndex) => (
+                                  <li key={proIndex} className="flex items-start">
                                     <span className="text-green-500 mr-1">•</span>
-                                    {feature}
+                                    {pro}
                                   </li>
                                 ))}
                               </ul>
                             </div>
-                            <a
-                              href={link.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center justify-center w-full px-3 py-2 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-700 transition-colors"
-                            >
-                              Book on {link.platform}
-                              <svg className="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
-                              </svg>
-                            </a>
                           </div>
-                        ))}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="bg-white border border-purple-100 rounded-lg p-4">
+                      <h4 className="font-bold text-gray-900 mb-2">{rec.name}</h4>
+                      <div className="grid grid-cols-2 gap-4 text-sm mb-3">
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Type:</span>
+                          <span className="font-medium">{rec.type}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Price:</span>
+                          <span className="font-medium text-green-600">{rec.priceRange}</span>
+                        </div>
                       </div>
+                      {rec.highlights && (
+                        <div className="flex flex-wrap gap-1">
+                          {rec.highlights.map((highlight, hIndex) => (
+                            <span key={hIndex} className="bg-purple-100 text-purple-700 px-2 py-1 rounded text-xs">
+                              {highlight}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {rec.bookingTips && (
+                    <div className="mt-4 bg-blue-50 border-l-4 border-blue-400 p-3 rounded-r">
+                      <p className="text-blue-800 text-sm">
+                        <span className="font-semibold">🏨 Booking Tips:</span> {rec.bookingTips}
+                      </p>
                     </div>
                   )}
                 </div>
               ))}
             </div>
-          )}
+          </div>
+        )}
 
-          {activeTab === 'booking' && (
-            <div className="space-y-6">
-              {data.bookingLinks ? (
-                <BookingLinksDisplay 
-                  bookingLinks={data.bookingLinks} 
-                  destination={destination}
-                />
-              ) : (
-                <div className="text-center py-12">
-                  <div className="text-6xl mb-4">🔗</div>
-                  <h3 className="text-xl font-semibold text-gray-900 mb-2">Booking Links Coming Soon</h3>
-                  <p className="text-gray-600 max-w-md mx-auto">
-                    We&apos;re generating personalized booking links for your trip. 
-                    This may take a moment to load.
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'tips' && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-bold text-gray-900">Travel Tips & Essentials</h2>
+        
+        {activeTab === 'budget' && (
+          <div className="space-y-6">
+            <h2 className="text-2xl font-bold text-gray-900 flex items-center">
+              <Wallet className="w-6 h-6 mr-3 text-green-600" />
+              Budget Breakdown
+            </h2>
+            
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-6">
-                <h3 className="text-lg font-bold text-blue-900 mb-4">🎒 Packing Essentials</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <h4 className="font-medium text-gray-900 mb-2">Essential Items</h4>
-                    <ul className="space-y-1 text-sm text-gray-700">
-                      {data.packingTips.essentials.map((item, i) => (
-                        <li key={i} className="flex items-center">
-                          <span className="w-2 h-2 bg-blue-400 rounded-full mr-2"></span>
-                          {item}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div>
-                    <h4 className="font-medium text-gray-900 mb-2">Luxury Travel Items</h4>
-                    <p className="text-sm text-gray-700">{data.packingTips.luxury}</p>
-                    <h4 className="font-medium text-gray-900 mb-2 mt-4">Cultural Considerations</h4>
-                    <p className="text-sm text-gray-700">{data.packingTips.cultural}</p>
-                  </div>
-                </div>
-                <div className="mt-4 p-3 bg-blue-100 rounded">
-                  <h4 className="font-medium text-blue-900 mb-1">Seasonal Packing</h4>
-                  <p className="text-sm text-blue-800">{data.packingTips.seasonal}</p>
-                </div>
-              </div>
-
               <div className="bg-green-50 border border-green-200 rounded-xl p-6">
-                <h3 className="text-lg font-bold text-green-900 mb-4">🌍 Local Insights</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <h4 className="font-medium text-gray-900 mb-2">🎭 Cultural Tips</h4>
-                    <ul className="space-y-2 text-sm text-gray-700">
-                      {data.localTips.cultural.map((tip, i) => (
-                        <li key={i} className="flex items-start">
-                          <span className="w-2 h-2 bg-green-400 rounded-full mr-2 mt-2"></span>
-                          {tip}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div>
-                    <h4 className="font-medium text-gray-900 mb-2">🛡️ Safety Tips</h4>
-                    <ul className="space-y-2 text-sm text-gray-700">
-                      {data.localTips.safety.map((tip, i) => (
-                        <li key={i} className="flex items-start">
-                          <span className="w-2 h-2 bg-green-400 rounded-full mr-2 mt-2"></span>
-                          {tip}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                <h3 className="text-xl font-bold text-green-900 mb-4">Total Budget</h3>
+                <div className="text-center mb-6">
+                  <div className="text-4xl font-bold text-green-600 mb-2">{data.budget.total}</div>
+                  <div className="text-green-700">Daily Average: {data.budget.dailyAverage}</div>
                 </div>
-                <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <h4 className="font-medium text-gray-900 mb-2">💡 Practical Tips</h4>
-                    <ul className="space-y-2 text-sm text-gray-700">
-                      {data.localTips.practical.map((tip, i) => (
-                        <li key={i} className="flex items-start">
-                          <span className="w-2 h-2 bg-green-400 rounded-full mr-2 mt-2"></span>
-                          {tip}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div>
-                    <h4 className="font-medium text-gray-900 mb-2">🤝 Etiquette</h4>
-                    <ul className="space-y-2 text-sm text-gray-700">
-                      {data.localTips.etiquette.map((tip, i) => (
-                        <li key={i} className="flex items-start">
-                          <span className="w-2 h-2 bg-green-400 rounded-full mr-2 mt-2"></span>
-                          {tip}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-purple-50 border border-purple-200 rounded-xl p-6">
-                <h3 className="text-lg font-bold text-purple-900 mb-4">📋 Booking Checklist</h3>
-                <div className="space-y-4">
-                  {data.bookingChecklist.map((item, index) => (
-                    <div key={index} className="flex items-start space-x-4 p-4 bg-white rounded-lg border border-purple-100">
-                      <div className={`w-3 h-3 rounded-full mt-1 ${
-                        item.priority === 'High' ? 'bg-red-400' : 'bg-yellow-400'
-                      }`}></div>
-                      <div className="flex-1">
-                        <div className="flex justify-between items-start mb-2">
-                          <h4 className="font-medium text-gray-900">{item.item}</h4>
-                          <span className={`px-2 py-1 text-xs rounded-full ${
-                            item.priority === 'High' 
-                              ? 'bg-red-100 text-red-800' 
-                              : 'bg-yellow-100 text-yellow-800'
-                          }`}>
-                            {item.priority} Priority
-                          </span>
-                        </div>
-                        <p className="text-sm text-gray-600 mb-2">⏰ {item.timeframe}</p>
-                        <p className="text-sm text-gray-700">{item.notes}</p>
-                      </div>
+                
+                <div className="space-y-3">
+                  {Object.entries(data.budget.breakdown).map(([category, amount]) => (
+                    <div key={category} className="flex justify-between items-center">
+                      <span className="font-medium text-gray-900 capitalize">{category}:</span>
+                      <span className="text-green-600 font-semibold">{amount}</span>
                     </div>
                   ))}
                 </div>
               </div>
+              
+              
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-6">
+                <h3 className="text-xl font-bold text-blue-900 mb-4">💰 Money-Saving Tips</h3>
+                <ul className="space-y-3">
+                  {data.budget.savingTips.map((tip, index) => (
+                    <li key={index} className="flex items-start">
+                      <span className="w-2 h-2 bg-blue-400 rounded-full mr-3 mt-2"></span>
+                      <span className="text-blue-800 text-sm">{tip}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
-          )}
-        </div>
-      </div>
-    );
-  };
+            
+            
+            {data.budget.splurgeRecommendations && (
+              <div className="bg-purple-50 border border-purple-200 rounded-xl p-6">
+                <h3 className="text-xl font-bold text-purple-900 mb-4">✨ Worth the Splurge</h3>
+                <ul className="space-y-3">
+                  {data.budget.splurgeRecommendations.map((splurge, index) => (
+                    <li key={index} className="flex items-start">
+                      <span className="w-2 h-2 bg-purple-400 rounded-full mr-3 mt-2"></span>
+                      <span className="text-purple-800 text-sm">{splurge}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
 
-  return (
-    <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-200">
-      <div className="bg-blue-600 p-6 text-white">
-        <div className="flex justify-between items-start">
-          <div>
-            <h2 className="text-2xl font-bold">✈️ {destination}</h2>
-            <p className="text-blue-100 mt-1">
-              {formatDate(startDate)} - {formatDate(endDate)}
-            </p>
-          </div>
-          <div className="flex space-x-2">
-            <button
-              onClick={downloadItinerary}
-              disabled={isDownloading}
-              className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-all duration-200 flex items-center text-sm font-medium disabled:opacity-50"
-            >
-              {isDownloading ? (
-                <>
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Downloading...
-                </>
-              ) : (
-                <>
-                  <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
-                  </svg>
-                  Download
-                </>
-              )}
-            </button>
-            
-            <button
-              onClick={downloadPdf}
-              disabled={isPdfDownloading}
-              className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-all duration-200 flex items-center text-sm font-medium disabled:opacity-50"
-            >
-              {isPdfDownloading ? (
-                <>
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Creating PDF...
-                </>
-              ) : (
-                <>
-                  <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                  </svg>
-                  PDF
-                </>
-              )}
-            </button>
-            
-            <button
-              onClick={shareItinerary}
-              className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-all duration-200 flex items-center text-sm font-medium"
-            >
-              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"></path>
-              </svg>
-              Share
-            </button>
-          </div>
-        </div>
-      </div>
-      
-      <div className="p-6">
-        {isStructured ? renderStructuredItinerary() : (
-          <div className="prose prose-blue max-w-none">
-            <ReactMarkdown>{typeof itinerary === 'string' ? itinerary : ''}</ReactMarkdown>
+        
+        {activeTab === 'booking' && (
+          <div className="space-y-6">
+            {data.bookingLinks ? (
+              <BookingLinksDisplay 
+                bookingLinks={data.bookingLinks} 
+                destination={destination}
+              />
+            ) : (
+              <div className="text-center py-12">
+                <div className="text-6xl mb-4">🔗</div>
+                <h3 className="text-xl font-semibold text-gray-900 mb-2">Booking Links Coming Soon</h3>
+                <p className="text-gray-600 max-w-md mx-auto">
+                  We&apos;re generating personalized booking links for your trip.
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
