@@ -198,7 +198,7 @@ export async function POST(request: NextRequest) {
 }
 
 
-export async function getWeatherData(destination: string): Promise<WeatherData | null> {
+async function getWeatherData(destination: string): Promise<WeatherData | null> {
   try {
     if (!OPENWEATHER_API_KEY) {
       console.log('OpenWeather API key not available');

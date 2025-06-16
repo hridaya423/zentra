@@ -187,7 +187,7 @@ export async function POST(request: NextRequest) {
 }
 
 
-export async function getPlacesData(destination: string, interests: string[] = [], limit: number = 50): Promise<PlacesResponse | null> {
+async function getPlacesData(destination: string, interests: string[] = [], limit: number = 50): Promise<PlacesResponse | null> {
   try {
     if (!FOURSQUARE_API_KEY) {
       console.log('Foursquare API key not available');

@@ -4,8 +4,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { Groq } from 'groq-sdk';
-import { getWeatherData } from '../weather/route';
-import { getPlacesData } from '../places/route';
 import { Destination, BookingLinks, StructuredItinerary, BookingLink } from '@/types/travel';
 import { extractJSONFromResponse } from '@/lib/utils/ai-response-filter';
 
@@ -423,7 +421,6 @@ async function researchBookingLinks(query: string, limit = 5): Promise<BookingLi
   }));
 }
 
-// Add a new function to call the discover-activities API directly
 async function fetchUniqueActivities(destination: string, interests: string[], travelStyle: string): Promise<any[]> {
   try {
     const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/discover-activities`, {
@@ -447,6 +444,53 @@ async function fetchUniqueActivities(destination: string, interests: string[], t
   } catch (error) {
     console.error('Error fetching unique activities:', error);
     return [];
+  }
+}
+
+async function fetchWeatherData(destination: string): Promise<any> {
+  try {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/weather`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        destination,
+      }),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Weather API returned status ${response.status}`);
+    }
+    
+    return response.json();
+  } catch (error) {
+    console.error('Error fetching weather data:', error);
+    return null;
+  }
+}
+
+async function fetchPlacesData(destination: string, interests: string[] = []): Promise<any> {
+  try {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/places`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        destination,
+        interests,
+      }),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Places API returned status ${response.status}`);
+    }
+    
+    return response.json();
+  } catch (error) {
+    console.error('Error fetching places data:', error);
+    return null;
   }
 }
 
@@ -545,15 +589,9 @@ export async function POST(request: NextRequest) {
           travelStyle || 'balanced'
         );
 
-        const weatherPromise = getWeatherData(destName).catch(err => {
-          console.error('Error fetching weather:', err);
-          return null;
-        });
+        const weatherPromise = fetchWeatherData(destName);
 
-        const placesPromise = getPlacesData(destName, interests || []).catch(err => {
-          console.error('Error fetching places:', err);
-          return null;
-        });
+        const placesPromise = fetchPlacesData(destName, interests || []);
 
         const [accommodationData, activityData, localData, uniqueActivities, weatherData, placesData] = await Promise.all([
           scrapeAccommodationData(destName, startDate, endDate, budget),
