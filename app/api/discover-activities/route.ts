@@ -88,7 +88,7 @@ async function searchAndScrapeActivities(destination: string, interests: string[
   }
 }
 
-async function discoverUniqueActivities(destination: string, interests: string[], travelStyle: string) {
+export async function discoverUniqueActivities(destination: string, interests: string[], travelStyle: string) {
   if (!destination) {
     return { activities: [], sources: [] };
   }

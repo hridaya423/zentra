@@ -189,7 +189,4 @@ QUALITY REQUIREMENTS:
       safetyTips: []
     };
   }
-}
-
-
-export { generateLocalInsights }; 
+} 
