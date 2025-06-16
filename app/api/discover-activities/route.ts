@@ -205,7 +205,4 @@ export async function POST(request: NextRequest) {
     console.error('Error in discover-activities:', error);
     return NextResponse.json({ activities: [], sources: [] }, { status: 500 });
   }
-}
-
-
-export { discoverUniqueActivities }; 
+} 
