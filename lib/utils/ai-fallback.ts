@@ -21,32 +21,30 @@ export async function createChatCompletionWithFallback(
     
     return groqResponse.choices[0]?.message?.content || null;
   } catch (error: unknown) {
-    const typedError = error as { status?: number };
-    if (typedError.status === 429) {
-      console.warn('Groq API rate limit exceeded. Falling back to Hack Club AI.');
-      try {
-        const hackClubResponse = await fetch('https://ai.hackclub.com/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ messages }),
-        });
-        
-        if (hackClubResponse.ok) {
-          const data = await hackClubResponse.json();
-          return data.choices[0]?.message?.content || null;
-        } else {
-          console.error('Hack Club AI API request failed:', hackClubResponse.statusText);
-          return "Both APIs failed";
-        }
-      } catch (hackClubError) {
-        console.error('Error calling Hack Club AI API:', hackClubError);
+
+    console.error('Groq API error:', error);
+    
+    
+    console.warn('Groq API call failed. Falling back to Hack Club AI.');
+    try {
+      const hackClubResponse = await fetch('https://ai.hackclub.com/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ messages }),
+      });
+      
+      if (hackClubResponse.ok) {
+        const data = await hackClubResponse.json();
+        return data.choices[0]?.message?.content || null;
+      } else {
+        console.error('Hack Club AI API request failed:', hackClubResponse.statusText);
         return "Both APIs failed";
       }
+    } catch (hackClubError) {
+      console.error('Error calling Hack Club AI API:', hackClubError);
+      return "Both APIs failed";
     }
-    
-    console.error('Groq API error:', error);
-    throw error;
   }
 } 
