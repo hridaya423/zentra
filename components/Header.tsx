@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useState, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
-import { Plane } from 'lucide-react';
+import { Plane, Github } from 'lucide-react';
 
 export default function Header() {
   const pathname = usePathname();
@@ -28,7 +28,7 @@ export default function Header() {
             </div>
           </div>
         </Link>
-        <nav className={`flex space-x-6 transition-all duration-500 ease-out delay-150 ${isLoaded ? 'translate-x-0 opacity-100' : 'translate-x-10 opacity-0'}`}>
+        <nav className={`flex items-center space-x-6 transition-all duration-500 ease-out delay-150 ${isLoaded ? 'translate-x-0 opacity-100' : 'translate-x-10 opacity-0'}`}>
           {showPlanningBadge ? (
             <div className="flex items-center px-4 py-2 bg-teal-50 rounded-full border border-teal-200">
               <Plane className="w-4 h-4 text-teal-600 mr-2" />
@@ -39,6 +39,15 @@ export default function Header() {
               Start Planning
             </Link>
           )}
+          <a
+            href="https://github.com/hridaya423/zentra"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn-secondary flex items-center"
+          >
+            <Github className="w-4 h-4 mr-2" />
+            Star on GitHub
+          </a>
         </nav>
       </div>
     </header>

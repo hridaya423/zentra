@@ -1,3 +1,4 @@
+import { Github } from 'lucide-react';
 
 export default function Footer() {
   return (
@@ -23,6 +24,15 @@ export default function Footer() {
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-8 text-sm text-gray-400">
             <span>Made with ❤️ by Hridya</span>
+            <a
+              href="https://github.com/hridaya423/zentra"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center space-x-2 hover:text-white transition-colors"
+            >
+              <Github size={16} />
+              <span>Leave a star on GitHub!</span>
+            </a>
           </div>
         </div>
       </div>

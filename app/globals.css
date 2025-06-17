@@ -86,6 +86,28 @@ button:focus {
   transition: all 0.1s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+.btn-secondary {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-medium);
+  border-radius: 12px;
+  padding: 12px 24px;
+  font-weight: 600;
+  font-size: 16px;
+  cursor: pointer;
+  box-shadow: var(--shadow-soft);
+  transform: translateY(0);
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-secondary:hover {
+  background: var(--warm-gray);
+  color: var(--text-primary);
+  border-color: var(--primary-teal);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-medium);
+}
+
 .card-elevated {
   background: var(--soft-white);
   border-radius: 16px;
