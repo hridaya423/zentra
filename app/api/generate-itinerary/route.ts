@@ -3,14 +3,10 @@
 
 
 import { NextRequest, NextResponse } from 'next/server';
-import { Groq } from 'groq-sdk';
 import { Destination, BookingLinks, StructuredItinerary, BookingLink } from '@/types/travel';
 import { extractJSONFromResponse } from '@/lib/utils/ai-response-filter';
+import { createChatCompletionWithFallback } from '@/lib/utils/ai-fallback';
 
-
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
 
 const FIRECRAWL_API_URL = process.env.FIRECRAWL_API_URL ?? 'https://api.firecrawl.dev/v1';
 const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
@@ -164,20 +160,17 @@ BUDGET ALIGNMENT FOR ${budget}:
 OUTPUT FORMAT - Return ONLY this JSON array:
 [{"name": "Actual property name from content", "priceRange": "Realistic price range for budget level", "rating": actual_rating_number, "reviews": actual_review_count, "amenities": ["Verified amenity list"], "location": "Specific neighborhood or area", "availability": true_or_false_based_on_content}]`;
     
-    const completion = await groq.chat.completions.create({
-      messages: [
-        { 
-          role: "system", 
-          content: "You are a professional accommodation data analyst with expertise in hospitality market intelligence, pricing analysis, and property assessment. You specialize in extracting accurate, current accommodation information that matches specific budget requirements and traveler needs. Your analysis considers location desirability, amenity value, pricing trends, and guest satisfaction metrics. You respond with ONLY valid JSON - no explanations, no reasoning, no thinking blocks." 
-        },
+    const systemMessage = "You are a professional accommodation data analyst with expertise in hospitality market intelligence, pricing analysis, and property assessment. You specialize in extracting accurate, current accommodation information that matches specific budget requirements and traveler needs. Your analysis considers location desirability, amenity value, pricing trends, and guest satisfaction metrics. You respond with ONLY valid JSON - no explanations, no reasoning, no thinking blocks.";
+    
+    const response = await createChatCompletionWithFallback(
+      [
+        { role: "system", content: systemMessage },
         { role: "user", content: prompt }
       ],
-      model: "deepseek-r1-distill-llama-70b",
-      temperature: 0.1,
-      max_tokens: 1000,
-    });
-    
-    const response = completion.choices[0]?.message?.content || '';
+      "deepseek-r1-distill-llama-70b",
+      0.1,
+      1000
+    ) || '';
     const jsonString = extractJSONFromResponse(response);
     if (jsonString) {
       try {
@@ -262,20 +255,17 @@ BUDGET ALIGNMENT FOR ${budget}:
 OUTPUT FORMAT - Return ONLY this JSON array:
 [{"name": "Specific activity name from content", "type": "Accurate category/type", "price": "Realistic price for budget", "duration": "Actual duration stated", "rating": actual_rating_number, "reviews": actual_review_count, "description": "Compelling description highlighting unique aspects", "bookingRequired": true_or_false_based_on_content}]`;
     
-    const completion = await groq.chat.completions.create({
-      messages: [
-        { 
-          role: "system", 
-          content: "You are a professional activity and experience analyst with expertise in destination-specific attractions, pricing intelligence, and traveler preference matching. You specialize in extracting accurate activity information that aligns with specific interests and budget constraints. Your analysis considers activity quality, booking logistics, pricing accuracy, and authentic local experiences. You respond with ONLY valid JSON - no explanations, no reasoning, no thinking blocks." 
-        },
+    const systemMessage = "You are a professional activity and experience analyst with expertise in destination-specific attractions, pricing intelligence, and traveler preference matching. You specialize in extracting accurate activity information that aligns with specific interests and budget constraints. Your analysis considers activity quality, booking logistics, pricing accuracy, and authentic local experiences. You respond with ONLY valid JSON - no explanations, no reasoning, no thinking blocks.";
+    
+    const response = await createChatCompletionWithFallback(
+      [
+        { role: "system", content: systemMessage },
         { role: "user", content: prompt }
       ],
-      model: "deepseek-r1-distill-llama-70b",
-      temperature: 0.1,
-      max_tokens: 1000,
-    });
-    
-    const response = completion.choices[0]?.message?.content || '';
+      "deepseek-r1-distill-llama-70b",
+      0.1,
+      1000
+    ) || '';
     const jsonString = extractJSONFromResponse(response);
     if (jsonString) {
       try {
@@ -359,20 +349,17 @@ OUTPUT FORMAT - Return ONLY this JSON structure:
   "transportUpdates": ["Current transport information", "Payment methods and practical tips"]
 }`;
     
-    const completion = await groq.chat.completions.create({
-      messages: [
-        { 
-          role: "system", 
-          content: "You are a local destination intelligence specialist with comprehensive knowledge of cultural events, seasonal travel patterns, transportation systems, and authentic local experiences. You excel at extracting current, actionable travel intelligence that helps visitors navigate destinations like locals. Your expertise covers cultural customs, practical logistics, safety considerations, and insider knowledge. You respond with ONLY valid JSON - no explanations, no reasoning, no thinking blocks." 
-        },
+    const systemMessage = "You are a local destination intelligence specialist with comprehensive knowledge of cultural events, seasonal travel patterns, transportation systems, and authentic local experiences. You excel at extracting current, actionable travel intelligence that helps visitors navigate destinations like locals. Your expertise covers cultural customs, practical logistics, safety considerations, and insider knowledge. You respond with ONLY valid JSON - no explanations, no reasoning, no thinking blocks.";
+    
+    const response = await createChatCompletionWithFallback(
+      [
+        { role: "system", content: systemMessage },
         { role: "user", content: prompt }
       ],
-      model: "deepseek-r1-distill-llama-70b",
-      temperature: 0.1,
-      max_tokens: 1500,
-    });
-    
-    const response = completion.choices[0]?.message?.content || '';
+      "deepseek-r1-distill-llama-70b",
+      0.1,
+      1500
+    ) || '';
     const jsonString = extractJSONFromResponse(response);
     if (jsonString) {
       try {
@@ -1518,28 +1505,21 @@ Return ONLY valid JSON in this EXACT structure:
 }`;
 
     
-    const completion = await groq.chat.completions.create({
-      messages: [
-        {
-          role: "system",
-          content: `You are a world-renowned master travel planner and cultural immersion specialist with 25+ years of expertise creating transformative, meticulously detailed travel experiences. Your specialties include: proactive hour-by-hour scheduling, insider cultural insights, budget optimization, authentic local experiences, seasonal timing strategies, advance booking coordination, and practical logistics mastery. 
+    const systemPrompt = `You are a world-renowned master travel planner and cultural immersion specialist with 25+ years of expertise creating transformative, meticulously detailed travel experiences. Your specialties include: proactive hour-by-hour scheduling, insider cultural insights, budget optimization, authentic local experiences, seasonal timing strategies, advance booking coordination, and practical logistics mastery. 
 
 CRITICAL: You MUST generate exactly ${tripDuration} days in the itinerary.days array. This is non-negotiable. Each day must have detailed activities, meals, and transport information. Do not abbreviate or skip days due to length constraints.
 
-You understand that exceptional travel planning anticipates needs, provides alternatives, respects budgets religiously, and creates authentic connections with local culture. Your itineraries are comprehensive travel guides that serve as complete roadmaps for unforgettable journeys. You excel at balancing must-see highlights with hidden gems, managing realistic timing with transport logistics, and matching experiences perfectly to traveler personalities and interests. Every recommendation includes practical details, cultural context, insider tips, and authentic local experiences. You respond with ONLY valid JSON that can be parsed directly - ensure complete, properly closed JSON structure with all brackets and braces.`
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      model: "llama-3.3-70b-versatile",
-      temperature: 0.5,
-      max_tokens: 15000,
-      top_p: 0.8, 
-    });
+You understand that exceptional travel planning anticipates needs, provides alternatives, respects budgets religiously, and creates authentic connections with local culture. Your itineraries are comprehensive travel guides that serve as complete roadmaps for unforgettable journeys. You excel at balancing must-see highlights with hidden gems, managing realistic timing with transport logistics, and matching experiences perfectly to traveler personalities and interests. Every recommendation includes practical details, cultural context, insider tips, and authentic local experiences. You respond with ONLY valid JSON that can be parsed directly - ensure complete, properly closed JSON structure with all brackets and braces.`;
 
-    const itineraryResponse = completion.choices[0]?.message?.content || "Failed to generate itinerary";
+    const itineraryResponse = await createChatCompletionWithFallback(
+      [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: prompt }
+      ],
+      "llama-3.3-70b-versatile",
+      0.5,
+      15000
+    ) || "Failed to generate itinerary";
     
     let itineraryData;
     
@@ -1634,8 +1614,8 @@ Follow this structure:
 }`;
           
           try {
-            const retryCompletion = await groq.chat.completions.create({
-              messages: [
+            const retryResponse = await createChatCompletionWithFallback(
+              [
                 {
                   role: "system",
                   content: "You are a travel planner who ONLY outputs valid JSON. No explanations, no markdown, just pure JSON."
@@ -1645,13 +1625,12 @@ Follow this structure:
                   content: retryPrompt
                 }
               ],
-              model: "llama-3.3-70b-versatile",
-              temperature: 0.3, 
-              max_tokens: 1000, 
-              top_p: 0.95,
-            });
+              "llama-3.3-70b-versatile",
+              0.3,
+              1000
+            );
             
-            lastResponse = retryCompletion.choices[0]?.message?.content || "Failed to generate itinerary";
+            lastResponse = retryResponse || "Failed to generate itinerary";
           } catch (apiError) {
             console.error("API error during retry:", apiError);
           }

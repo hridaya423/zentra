@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Groq } from 'groq-sdk';
 import { extractJSONFromResponse } from '@/lib/utils/ai-response-filter';
-
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+import { createChatCompletionWithFallback } from '@/lib/utils/ai-fallback';
 
 interface LocalInsights {
   destination: string;
@@ -136,20 +132,22 @@ QUALITY REQUIREMENTS:
 - Include practical, actionable information that enhances the travel experience
 - Focus on authentic local knowledge rather than generic travel advice`;
 
-    const completion = await groq.chat.completions.create({
-      messages: [
-        { 
-          role: "system", 
-          content: "You are a world-class local destination expert with deep cultural knowledge, current market intelligence, and insider access to authentic local experiences. You specialize in providing practical, actionable travel advice that helps visitors experience destinations like informed locals. Your expertise covers cultural customs, seasonal patterns, local events, budget strategies, and hidden gems. You respond with ONLY valid JSON - no explanations, no reasoning, no thinking blocks." 
-        },
+    const systemMessage = "You are a world-class local destination expert with deep cultural knowledge, current market intelligence, and insider access to authentic local experiences. You specialize in providing practical, actionable travel advice that helps visitors experience destinations like informed locals. Your expertise covers cultural customs, seasonal patterns, local events, budget strategies, and hidden gems. You respond with ONLY valid JSON - no explanations, no reasoning, no thinking blocks.";
+
+    const response = await createChatCompletionWithFallback(
+      [
+        { role: "system", content: systemMessage },
         { role: "user", content: prompt }
       ],
-      model: "deepseek-r1-distill-llama-70b",
-      temperature: 0.3,
-      max_tokens: 1500,
-    });
+      "deepseek-r1-distill-llama-70b",
+      0.3,
+      1500
+    );
 
-    const response = completion.choices[0]?.message?.content || '';
+    if (!response) {
+      return getDefaultInsights(destination);
+    }
+    
     const jsonString = extractJSONFromResponse(response);
     
     if (jsonString) {
@@ -158,35 +156,28 @@ QUALITY REQUIREMENTS:
         return insights;
       } catch (e) {
         console.error('Error parsing local insights JSON:', e, 'Raw response:', response.substring(0, 200));
+        return getDefaultInsights(destination);
       }
     }
     
-    
-    return {
-      destination,
-      accommodationTips: [`Check local accommodation options in ${destination} for ${budget} budget travelers`],
-      localEvents: [],
-      transportTips: [`Research local transportation options in ${destination}`],
-      culturalTips: [`Learn about local customs and etiquette in ${destination}`],
-      budgetTips: [`Budget ${budget} travelers should research local pricing in ${destination}`],
-      seasonalAdvice: [`Check current weather and seasonal considerations for ${destination}`],
-      hiddenGems: [`Explore local recommendations and hidden gems in ${destination}`],
-      foodRecommendations: [`Try local cuisine and traditional dishes in ${destination}`],
-      safetyTips: [`Follow standard travel safety precautions in ${destination}`]
-    };
+    return getDefaultInsights(destination);
   } catch (error) {
     console.error('Error in generateLocalInsights:', error);
-    return {
-      destination,
-      accommodationTips: [],
-      localEvents: [],
-      transportTips: [],
-      culturalTips: [],
-      budgetTips: [],
-      seasonalAdvice: [],
-      hiddenGems: [],
-      foodRecommendations: [],
-      safetyTips: []
-    };
+    return getDefaultInsights(destination);
   }
+}
+
+function getDefaultInsights(destination: string): LocalInsights {
+  return {
+    destination,
+    accommodationTips: [`Check local accommodation options in ${destination}`],
+    localEvents: [],
+    transportTips: [`Research local transportation options in ${destination}`],
+    culturalTips: [`Learn about local customs and etiquette in ${destination}`],
+    budgetTips: [`Research local pricing in ${destination}`],
+    seasonalAdvice: [`Check current weather and seasonal considerations for ${destination}`],
+    hiddenGems: [`Explore local recommendations and hidden gems in ${destination}`],
+    foodRecommendations: [`Try local cuisine and traditional dishes in ${destination}`],
+    safetyTips: [`Follow standard travel safety precautions in ${destination}`]
+  };
 } 

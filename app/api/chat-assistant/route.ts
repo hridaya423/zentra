@@ -1,15 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Groq } from 'groq-sdk';
 import { StructuredItinerary } from '@/types/travel';
+import { createChatCompletionWithFallback } from '@/lib/utils/ai-fallback';
 
 function filterThinkingTags(response: string): string {
   
   return response.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 }
-
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -311,8 +307,8 @@ async function handleItineraryModification(
   
   try {
     
-    const analysisResponse = await groq.chat.completions.create({
-      messages: [
+    const analysisContent = await createChatCompletionWithFallback(
+      [
         {
           role: "system",
           content: `You are a travel itinerary modification assistant. Based on user input, you will analyze an itinerary and suggest specific changes.
@@ -344,12 +340,11 @@ async function handleItineraryModification(
           Only respond with your brief analysis and the JSON array of changes as described.`
         }
       ],
-      model: "meta-llama/llama-4-scout-17b-16e-instruct",
-      temperature: 0.3,
-      max_tokens: 2048,
-    });
+      "meta-llama/llama-4-scout-17b-16e-instruct",
+      0.3,
+      2048
+    ) || "";
     
-    const analysisContent = analysisResponse.choices[0]?.message?.content || "";
     console.log("Analysis response:", analysisContent);
     
     
@@ -491,15 +486,14 @@ async function handleItineraryModification(
       console.log("Modified itinerary:", JSON.stringify(modifiedItinerary, null, 2).substring(0, 200) + "...");
       
       
-      const responsePrompt = `Based on the user's request to "${message}", you have modified their ${itinerary.destinations.map(d => d.name).join(' & ')} itinerary. 
+      const responsePrompt = `The user wants to ${intentAnalysis.specificAction} in their travel itinerary to ${itinerary.destinations.map(d => d.name).join(', ')}. Based on an analysis of their itinerary, I've suggested the following specific changes:
+
+    ${changesArray.map(change => `- ${change.description}`).join("\n")}
+    
+    Please create a friendly, enthusiastic response explaining these changes in a natural way.`;
       
-      The changes you made were:
-      ${changesArray.map(change => `- ${change.description} ${change.affectedDays ? `(affecting day(s) ${change.affectedDays.join(', ')})` : ''}`).join('\n')}
-      
-      Please create a friendly, enthusiastic response explaining these changes in a natural way.`;
-      
-      const finalResponse = await groq.chat.completions.create({
-        messages: [
+      const responseText = await createChatCompletionWithFallback(
+        [
           {
             role: "system",
             content: `You are a helpful travel assistant explaining changes made to an itinerary.`
@@ -509,12 +503,10 @@ async function handleItineraryModification(
             content: responsePrompt
           }
         ],
-        model: "meta-llama/llama-4-scout-17b-16e-instruct",
-        temperature: 0.7,
-        max_tokens: 300,
-      });
-      
-      const responseText = finalResponse.choices[0]?.message?.content || "";
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        0.7,
+        300
+      ) || "I've analyzed your itinerary and made some changes based on your request. The modified itinerary now includes the adjustments you asked for.";
       
       
       const suggestions = generateDynamicSuggestions(changesArray, intentAnalysis.specificAction, itinerary);

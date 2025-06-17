@@ -1,9 +1,5 @@
 import { NextResponse } from 'next/server';
-import { Groq } from 'groq-sdk';
-
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+import { createChatCompletionWithFallback } from '@/lib/utils/ai-fallback';
 
 export async function GET(request: Request) {
   try {
@@ -48,24 +44,23 @@ export async function GET(request: Request) {
       attempts++;
       
       try {
-        const completion = await groq.chat.completions.create({
-          messages: [
+        const responseContent = await createChatCompletionWithFallback(
+          [
             {
               role: "user",
               content: prompt,
             },
           ],
-          model: "llama3-70b-8192",
-          temperature: page === 1 ? 0.5 : 0.7, 
-          max_tokens: 1024,
-        });
+          "llama3-70b-8192",
+          page === 1 ? 0.5 : 0.7,
+          1024
+        );
 
-        const responseContent = completion.choices[0]?.message?.content || '';
-        
-        
-        const jsonMatch = responseContent.match(/\[\s*\{[\s\S]*\}\s*\]/);
-        if (jsonMatch) {
-          destinations = JSON.parse(jsonMatch[0]);
+        if (responseContent) {
+          const jsonMatch = responseContent.match(/\[\s*\{[\s\S]*\}\s*\]/);
+          if (jsonMatch) {
+            destinations = JSON.parse(jsonMatch[0]);
+          }
         }
       } catch (error) {
         console.error(`Attempt ${attempts} failed:`, error);

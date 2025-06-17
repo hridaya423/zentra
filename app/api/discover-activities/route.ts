@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Groq } from 'groq-sdk';
 import { extractJSONFromResponse } from '@/lib/utils/ai-response-filter';
-
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+import { createChatCompletionWithFallback } from '@/lib/utils/ai-fallback';
 
 const FIRECRAWL_API_URL = process.env.FIRECRAWL_API_URL ?? 'https://api.firecrawl.dev/v1';
 const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
@@ -157,20 +153,22 @@ QUALITY REQUIREMENTS:
 - Cost ranges should reflect current pricing reality
 - Perfect alignment with ${travelStyle} style and ${interests?.join('/')} interests`;
 
-    const completion = await groq.chat.completions.create({
-      messages: [
-        { 
-          role: "system", 
-          content: "You are a world-class local destination expert and authentic experience curator with insider knowledge of unique activities, hidden gems, and cultural immersions. You specialize in matching activities to specific travel styles and interests while providing practical booking guidance and insider tips. Your expertise covers advance reservation strategies, pricing realities, seasonal considerations, and authentic local experiences that create lasting memories. You respond with ONLY valid JSON - no explanations, no reasoning, no thinking blocks." 
-        },
+    const systemMessage = "You are a world-class local destination expert and authentic experience curator with insider knowledge of unique activities, hidden gems, and cultural immersions. You specialize in matching activities to specific travel styles and interests while providing practical booking guidance and insider tips. Your expertise covers advance reservation strategies, pricing realities, seasonal considerations, and authentic local experiences that create lasting memories. You respond with ONLY valid JSON - no explanations, no reasoning, no thinking blocks.";
+
+    const response = await createChatCompletionWithFallback(
+      [
+        { role: "system", content: systemMessage },
         { role: "user", content: prompt }
       ],
-      model: "deepseek-r1-distill-llama-70b",
-      temperature: 0.4,
-      max_tokens: 2000,
-    });
+      "deepseek-r1-distill-llama-70b",
+      0.4,
+      2000
+    );
 
-    const response = completion.choices[0]?.message?.content || '';
+    if (!response) {
+      return { activities: [], sources: [] };
+    }
+    
     const jsonString = extractJSONFromResponse(response);
     
     if (jsonString) {
@@ -185,7 +183,6 @@ QUALITY REQUIREMENTS:
         return { activities: [], sources: [] };
       }
     }
-    
     
     return { activities: [], sources: [] };
   } catch (error) {

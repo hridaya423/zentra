@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { extractJSONFromResponse } from '@/lib/utils/ai-response-filter';
+import { createChatCompletionWithFallback } from '@/lib/utils/ai-fallback';
 
 interface Location {
   name: string;
@@ -78,42 +79,29 @@ QUALITY STANDARDS:
 - Duration should be realistic for experiencing the destination properly
 - Additional suggestions should complement their primary destination choices`;
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'deepseek-r1-distill-llama-70b',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a world-renowned travel consultant with deep expertise in global destinations, cultural nuances, and personalized travel planning. Your superpower is translating traveler dreams into perfect destination matches. You understand budget implications, seasonal considerations, visa requirements, and cultural fit. You respond with ONLY valid JSON - no explanations, no reasoning text, no thinking blocks. Your recommendations are precise, personalized, and demonstrate deep understanding of both the traveler and destinations.'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        max_tokens: 3000,
-        temperature: 0.7
-      })
-    });
+    const systemMessage = 'You are a world-renowned travel consultant with deep expertise in global destinations, cultural nuances, and personalized travel planning. Your superpower is translating traveler dreams into perfect destination matches. You understand budget implications, seasonal considerations, visa requirements, and cultural fit. You respond with ONLY valid JSON - no explanations, no reasoning text, no thinking blocks. Your recommendations are precise, personalized, and demonstrate deep understanding of both the traveler and destinations.';
 
-    if (!response.ok) {
-      throw new Error(`Groq API error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    const aiResponse = data.choices[0]?.message?.content;
+    const aiResponse = await createChatCompletionWithFallback(
+      [
+        {
+          role: 'system',
+          content: systemMessage
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      'deepseek-r1-distill-llama-70b',
+      0.7,
+      3000
+    );
     
     if (!aiResponse) {
-      throw new Error('No response from Groq API');
+      throw new Error('No response from AI API');
     }
 
     try {
-      
       const jsonString = extractJSONFromResponse(aiResponse);
       
       if (!jsonString) {
@@ -122,19 +110,15 @@ QUALITY STANDARDS:
       
       const parsedResponse = JSON.parse(jsonString);
       
-      
       let locations;
       if (Array.isArray(parsedResponse)) {
-        
         locations = parsedResponse;
       } else if (parsedResponse.locations && Array.isArray(parsedResponse.locations)) {
-        
         locations = parsedResponse.locations;
       } else {
         throw new Error('Invalid response structure');
       }
 
-      
       const validLocations = locations.filter((loc: Location) => 
         loc.name && loc.country && loc.reason && typeof loc.duration === 'number'
       );

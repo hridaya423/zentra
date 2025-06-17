@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Groq } from 'groq-sdk';
 import { extractJSONFromResponse } from '@/lib/utils/ai-response-filter';
-
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+import { createChatCompletionWithFallback } from '@/lib/utils/ai-fallback';
 
 export async function POST(request: NextRequest) {
   try {
@@ -60,20 +56,22 @@ QUALITY STANDARDS:
 - Perfect balance of popular attractions and hidden local gems
 - Each category should offer multiple activity options within it`;
 
-    const completion = await groq.chat.completions.create({
-      messages: [
-        { 
-          role: "system", 
-          content: "You are a destination expertise specialist with encyclopedic knowledge of global travel destinations and deep understanding of how different travel styles affect activity preferences. You excel at creating personalized, destination-specific interest categories that inspire travelers and highlight authentic local experiences. Your expertise covers cultural nuances, seasonal considerations, hidden gems, and travel logistics. You respond with ONLY valid JSON - no explanations, no reasoning, no thinking blocks." 
-        },
+    const systemMessage = "You are a destination expertise specialist with encyclopedic knowledge of global travel destinations and deep understanding of how different travel styles affect activity preferences. You excel at creating personalized, destination-specific interest categories that inspire travelers and highlight authentic local experiences. Your expertise covers cultural nuances, seasonal considerations, hidden gems, and travel logistics. You respond with ONLY valid JSON - no explanations, no reasoning, no thinking blocks.";
+
+    const response = await createChatCompletionWithFallback(
+      [
+        { role: "system", content: systemMessage },
         { role: "user", content: prompt }
       ],
-      model: "deepseek-r1-distill-llama-70b",
-      temperature: 0.3,
-      max_tokens: 1000,
-    });
-
-    const response = completion.choices[0]?.message?.content || '';
+      "deepseek-r1-distill-llama-70b",
+      0.3,
+      1000
+    );
+    
+    if (!response) {
+      return NextResponse.json({ suggestions: [] });
+    }
+    
     const jsonString = extractJSONFromResponse(response);
     
     if (jsonString) {
@@ -85,7 +83,6 @@ QUALITY STANDARDS:
         return NextResponse.json({ suggestions: [] });
       }
     }
-    
     
     return NextResponse.json({ suggestions: [] });
   } catch (error) {
