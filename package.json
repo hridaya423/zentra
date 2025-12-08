@@ -26,9 +26,9 @@
     "jspdf-autotable": "^5.0.2",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.556.0",
-    "next": "15.3.2",
+    "next": "15.3.6",
     "react": "^19.2.1",
-    "react-dom": "^19.0.0",
+    "react-dom": "^19.2.1",
     "react-leaflet": "^5.0.0",
     "react-markdown": "^10.1.0",
     "tailwind-merge": "^3.4.0"
@@ -42,7 +42,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "15.3.2",
+    "eslint-config-next": "15.3.6",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
